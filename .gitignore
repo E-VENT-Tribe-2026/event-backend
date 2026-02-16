@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- E-VENT DEVOPS CUSTOM RULES ---
+
+# Supabase Local Development
+supabase/.temp/
+supabase/functions/.env
+
+# MacOS system files (keeps the repo clean for Windows teammates)
+.DS_Store
+
+# FastAPI / Uvicorn
+.python-version
