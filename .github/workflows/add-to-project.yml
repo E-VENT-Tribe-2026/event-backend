@@ -10,7 +10,7 @@ jobs:
     name: Add item to project
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/add-to-project@v1
+      - uses: actions/add-to-project@main
         with:
           project-url: https://github.com/orgs/EVENT-Tribe-2026/projects/
           github-token: ${{ secrets.ADD_TO_PROJECT_BOARD }}
