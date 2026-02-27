@@ -1,0 +1,14 @@
+name: Check for Linked Issue
+on:
+  pull_request:
+    branches: [ dev ]
+    types: [opened, edited, synchronized]
+
+jobs:
+  check-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure Issue Link
+        uses: t-richards/linked-issue-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
