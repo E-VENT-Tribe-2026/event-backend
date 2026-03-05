@@ -22,5 +22,8 @@ def login(data: LoginRequest):
     )
 
 @router.get("/me")
-def get_me(user_id: str = Depends(get_current_user)):
-    return {"user_id": user_id}
+def get_profile(user = Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "email": user.email,
+    }

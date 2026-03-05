@@ -2,15 +2,13 @@ from jose import jwt, JWTError
 from fastapi import HTTPException, status
 from app.core.config import settings
 
-
 ALGORITHM = "HS256"
-
 
 def verify_token(token: str):
     try:
         payload = jwt.decode(
             token,
-            settings.SUPABASE_SERVICE_KEY,
+            settings.SUPABASE_JWT_SECRET,
             algorithms=[ALGORITHM],
             options={"verify_aud": False}
         )
