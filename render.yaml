@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: event-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    # Points to 'app.main:app' because your main.py is inside the app/ folder
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false # Set this in the Render dashboard manually
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
