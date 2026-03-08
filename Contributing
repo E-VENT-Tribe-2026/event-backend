@@ -1,0 +1,56 @@
+# 🤝 Team Collaboration Guide
+
+
+## 🌿 Our Branches
+- **`main`**: Production-ready code only. This is our "Golden Copy."
+- **`uat`**: Testing branch. This is where we verify that Frontend and Backend work together.
+- **`dev`**: Our daily workshop. All features meet here first.
+
+---
+
+## 🚀 Daily Workflow (The "Feature Branch" Method)
+
+Follow these steps for every new task (e.g., "Add Status Bar"):
+
+## The Rules:
+
+- NEVER push directly to main or dev.
+
+- ALWAYS create a new branch for every task (e.g., feat/add-login).
+
+- Secrets: I’ve put the secrets in GitHub for the future, but for local work, you need to create a local .env file. (you can check them out on the repo and add them to the project locally)
+make sure you do not push the .env file!
+
+### 1. Sync & Start
+Always start from the latest version of `dev`.
+```bash
+git checkout dev
+git pull origin dev
+git checkout -b feat/your-feature-name
+
+### 2. Work & Commit
+Code on your local machine. Save your progress with clear messages.
+```bash
+git add .
+git commit -m "feat: added [description of work]"
+
+### 3. Share & Review
+Push your branch and open a Pull Request (PR) to merge into dev.
+```bash
+git push origin feat/your-feature-name
+
+### Wait for your teammate to review and approve the PR before merging!
+
+### 4. Security & Secrets
+
+NEVER push the .env file to GitHub.
+
+- Ensure .env is listed in your .gitignore.
+
+- Use .env.example as a template for new keys.
+
+
+
+
+
+
