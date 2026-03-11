@@ -2,10 +2,10 @@
 
 This folder holds SQL migrations and notes for applying schema/seed changes to your Supabase project.
 
-Quick usage
------------
+## Quick usage
 
 Prerequisites:
+
 - Install the Supabase CLI (`supabase`) or use `npx supabase`.
 - Have your `SUPABASE_URL` and either be logged in with `supabase login` or have `SUPABASE_SERVICE_ROLE_KEY` available.
 
@@ -24,20 +24,19 @@ npx supabase db push
 supabase db push
 ```
 
-How migrations work
--------------------
+## How migrations work
+
 - Place SQL migration files in `supabase/migrations/` with a timestamped filename, e.g. `20260311_add_seed_rows.sql`.
 - `db push` will list pending files and ask for confirmation before applying them.
 - Keep migrations simple and idempotent (use `ON CONFLICT DO NOTHING` or conditional `INSERT` where appropriate).
 
-Notes for this project
-----------------------
+## Notes for this project
+
 - The project schema references `auth.users` and uses `UUID` keys for `profiles` and `events`.
 - If a migration inserts a `profiles` row, ensure the referenced `auth.users` row exists first (or insert a minimal `auth.users` row in the same migration).
 - CI: prefer running `npx supabase db push` with `SUPABASE_SERVICE_ROLE_KEY` set as a secret (do not commit the key).
 
-Example minimal migration (insert one profile + one event)
----------------------------------------------------------
+## Example minimal migration (insert one profile + one event)
 
 ```sql
 -- optional: ensure auth user exists
@@ -54,4 +53,4 @@ VALUES ('00000000-0000-4000-8000-000000000100'::uuid, 'Seed Event', 'Simple seed
 ON CONFLICT (id) DO NOTHING;
 ```
 
-If you want, I can add the above minimal SQL into `supabase/migrations/` and run `npx supabase db push` here (you'll need to be logged in or provide the service role key). 
+If you want, I can add the above minimal SQL into `supabase/migrations/` and run `npx supabase db push` here (you'll need to be logged in or provide the service role key).
