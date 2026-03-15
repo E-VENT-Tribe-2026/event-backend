@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth_routes, event_routes, profile_routes
+from app.api.v1 import auth_routes, event_routes, profile_routes, participant_routes
 
 api_router = APIRouter()
 
@@ -25,4 +25,10 @@ api_router.include_router(
     profile_routes.router,
     prefix="/profile",
     tags=["Profile"]
+)
+
+api_router.include_router(
+    participant_routes.router,
+    prefix="/participants",
+    tags=["Participants"]
 )

@@ -13,9 +13,6 @@ from app.services.event_service import (
 router = APIRouter()
 
 
-# IMPORTANT: Static routes (/me, /my) must be declared BEFORE dynamic routes (/{event_id})
-# to prevent FastAPI from treating "me" as an event_id.
-
 @router.get("/my")
 def get_my_events(
     page: int = Query(1, ge=1),

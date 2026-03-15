@@ -80,12 +80,5 @@ OPENAI_API_KEY=your_openai_key
 ```
 
 uvicorn app.main:app --reload
-
-
-## Notes
-
-- Supabase manages authentication and database schema.
-- Backend handles API logic and AI recommendation processing.
-- Do not commit `.env` to version control.
 ```
 

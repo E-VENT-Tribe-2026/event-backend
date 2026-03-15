@@ -7,11 +7,14 @@ from app.utils.embedding_helper import generate_embedding
 def create_event(user_id: str, data: dict):
     data["created_by"] = user_id
 
-    # Generate embedding from title + description for AI recommendations
-    text_for_embedding = f"{data.get('title', '')} {data.get('description', '')} {data.get('category', '')}"
-    embedding = generate_embedding(text_for_embedding)
-    if embedding:
-        data["event_embedding"] = embedding
+    for key, value in data.items():
+
+        if isinstance(value, datetime):
+            data[key] = value.isoformat()
+
+        # Convert float → int for bigint fields
+        if key in ["cost", "max_capacity"] and value is not None:
+            data[key] = int(value)
 
     response = supabase.table("events").insert(data).execute()
 
@@ -32,34 +35,41 @@ def get_event(event_id: str):
         .single()
         .execute()
     )
-
     if response.data is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Event not found"
         )
-
     return response.data
 
 
-def update_event(user_id: str, event_id: str, update_data: dict):
-    event = get_event(event_id)
+def _get_event_owner(event_id: str) -> str:
+    """Internal use only — returns just created_by as a plain string."""
+    response = (
+        supabase.table("events")
+        .select("id, created_by")
+        .eq("id", event_id)
+        .single()
+        .execute()
+    )
+    if response.data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found"
+        )
+    return response.data["created_by"]
 
-    if event["created_by"] != user_id:
+
+def update_event(user_id: str, event_id: str, update_data: dict):
+    if _get_event_owner(event_id) != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to update this event"
         )
 
-    # Regenerate embedding if title or description changed
-    if "title" in update_data or "description" in update_data or "category" in update_data:
-        title = update_data.get("title", event.get("title", ""))
-        description = update_data.get("description", event.get("description", ""))
-        category = update_data.get("category", event.get("category", ""))
-        text_for_embedding = f"{title} {description} {category}"
-        embedding = generate_embedding(text_for_embedding)
-        if embedding:
-            update_data["event_embedding"] = embedding
+    for key, value in update_data.items():
+        if isinstance(value, datetime):
+            update_data[key] = value.isoformat()
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -70,21 +80,17 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Event update failed"
         )
-
     return response.data[0]
 
 
 def delete_event(user_id: str, event_id: str):
-    event = get_event(event_id)
-
-    if event["created_by"] != user_id:
+    if _get_event_owner(event_id) != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to delete this event"
         )
 
     supabase.table("events").delete().eq("id", event_id).execute()
-
     return {"message": "Event deleted successfully"}
 
 
