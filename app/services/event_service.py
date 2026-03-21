@@ -98,33 +98,32 @@ def delete_event(user_id: str, event_id: str):
 
 def get_all_events_by_user(user_id: str):
     """Fetches every event owned by this user without pagination limits."""
-    # Ensure user_id isn't empty before hitting the DB
+    
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID is required")
 
     try:
-        
-       response = (
-    supabase
-    .table("events")
-    .select("*")
-    .eq("created_by", str(user_id))
-    .order("created_at", desc=True)
-    .execute()
-)
+        response = (
+            supabase
+            .table("events")
+            .select("*")
+            .eq("created_by", str(user_id))
+            .order("created_at", desc=True)
+            .execute()
+        )
 
         event_list = response.data if response.data else []
-        
+
         return {
             "status": "success",
             "total_count": len(event_list),
             "data": event_list
         }
+
     except Exception as e:
- 
         print(f"Error fetching user events: {str(e)}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Database Crash: {str(e)}"
         )
 
