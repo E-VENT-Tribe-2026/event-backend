@@ -28,8 +28,10 @@ def get_my_events(
 @router.get("/my-events")
 def get_all_my_events(user=Depends(get_current_user)):
     """Dedicated endpoint to get ALL events for the logged-in user."""
-    print("USER OBJECT:", user)
-    return {"debug": user}
+    user_id = user.id 
+    events_response = get_all_events_by_user(user_id)
+    
+    return events_response
     
 @router.get("/")
 def get_events(
