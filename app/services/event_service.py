@@ -104,9 +104,14 @@ def get_all_events_by_user(user_id: str):
 
     try:
         
-        query = supabase.table("events").select("*").eq("created_by", user_id).order("created_at", desc=True)
-        response = query.execute()
-        
+       response = (
+    supabase
+    .table("events")
+    .select("*")
+    .eq("created_by", str(user_id))
+    .order("created_at", desc=True)
+    .execute()
+)
 
         event_list = response.data if response.data else []
         
