@@ -8,6 +8,7 @@ from app.services.event_service import (
     delete_event,
     list_events,
     get_events_by_user,
+    get_all_events_by_user,
 )
 
 router = APIRouter()
