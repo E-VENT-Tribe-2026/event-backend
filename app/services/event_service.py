@@ -7,11 +7,12 @@ from app.utils.embedding_helper import generate_embedding
 def create_event(user_id: str, data: dict):
     data["created_by"] = user_id
 
-    # Generate embedding from title + description for AI recommendations
-    text_for_embedding = f"{data.get('title', '')} {data.get('description', '')} {data.get('category', '')}"
-    embedding = generate_embedding(text_for_embedding)
-    if embedding:
-        data["event_embedding"] = embedding
+    # --- TEMPORARILY DISABLED UNTIL API IS READY ---
+    # text_for_embedding = f"{data.get('title', '')} {data.get('description', '')} {data.get('category', '')}"
+    # embedding = generate_embedding(text_for_embedding)
+    # if embedding:
+    #     data["event_embedding"] = embedding
+    # -----------------------------------------------
 
     response = supabase.table("events").insert(data).execute()
 
