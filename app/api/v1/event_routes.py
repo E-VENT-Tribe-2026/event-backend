@@ -44,13 +44,8 @@ def create_new_event(
     user=Depends(get_current_user)
 ):
     """Create a new event. Authenticated users only."""
-    return create_event(user.id, data.model_dump())
-
-
-@router.get("/{event_id}")
-def read_event(event_id: str):
-    """Get a single event by ID. Public endpoint."""
-    return get_event(event_id)
+    # CHANGE: Add mode="json" to convert datetimes to strings
+    return create_event(user.id, data.model_dump(mode="json"))
 
 
 @router.put("/{event_id}")
@@ -60,7 +55,14 @@ def update_existing_event(
     user=Depends(get_current_user)
 ):
     """Update an event. Only the creator can update."""
-    return update_event(user.id, event_id, data.model_dump(exclude_unset=True))
+    # CHANGE: Add mode="json" here as well
+    return update_event(user.id, event_id, data.model_dump(mode="json", exclude_unset=True))
+
+
+@router.get("/{event_id}")
+def read_event(event_id: str):
+    """Get a single event by ID. Public endpoint."""
+    return get_event(event_id)
 
 
 @router.delete("/{event_id}")
