@@ -5,24 +5,36 @@ from app.utils.embedding_helper import generate_embedding
 
 
 def create_event(user_id: str, data: dict):
+    # 1. Clean the data - Remove keys that should be handled by DB defaults
+    # We remove 'id', 'created_at', and 'updated_at' so Supabase generates them
+    data.pop('id', None)
+    
+    # 2. Set the owner and a default status
     data["created_by"] = user_id
+    if "status" not in data or not data["status"]:
+        data["status"] = "active"
+    
+    # 3. Explicitly remove event_embedding if it's empty/missing 
+    # to avoid 'vector' type mismatch errors
+    if "event_embedding" in data:
+        data.pop("event_embedding")
 
-    # --- TEMPORARILY DISABLED UNTIL API IS READY ---
-    # text_for_embedding = f"{data.get('title', '')} {data.get('description', '')} {data.get('category', '')}"
-    # embedding = generate_embedding(text_for_embedding)
-    # if embedding:
-    #     data["event_embedding"] = embedding
-    # -----------------------------------------------
-
-    response = supabase.table("events").insert(data).execute()
-
-    if not response.data:
+    try:
+        # 4. Insert into Supabase
+        response = supabase.table("events").insert(data).execute()
+        
+        if not response.data:
+            raise Exception("No data returned from database insert.")
+            
+        return response.data[0]
+        
+    except Exception as e:
+        # This will print the EXACT column error to your Render logs
+        print(f"SUPABASE ERROR: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Event creation failed"
+            status_code=500,
+            detail=f"Database Error: {str(e)}"
         )
-
-    return response.data[0]
 
 
 def get_event(event_id: str):
