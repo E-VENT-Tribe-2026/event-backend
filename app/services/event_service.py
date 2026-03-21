@@ -101,7 +101,7 @@ def get_all_events_by_user(user_id: str):
     try:
         response = (
             supabase.table("events")
-            .select("*, profiles(full_name, avatar_url)") 
+            .select("*") 
             .eq("created_by", user_id)
             .order("created_at", desc=True)
             .execute()
