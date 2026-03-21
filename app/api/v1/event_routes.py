@@ -27,11 +27,22 @@ def get_my_events(
 
 @router.get("/my-events")
 def get_all_my_events(user=Depends(get_current_user)):
-    """Dedicated endpoint to get ALL events for the logged-in user."""
-    user_id = user.id 
-    events_response = get_all_events_by_user(user_id)
-    
-    return events_response
+    """Return all events created by the logged-in user."""
+
+    user_id = getattr(user, "id", None) or user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid user")
+
+    try:
+        events_response = get_all_events_by_user(user_id)
+        return events_response
+
+    except Exception as e:
+        print(f"Internal error in /my-events: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not fetch events for user"
+        )
     
 @router.get("/")
 def get_events(
