@@ -5,36 +5,31 @@ from app.utils.embedding_helper import generate_embedding
 
 
 def create_event(user_id: str, data: dict):
-    # 1. Clean the data - Remove keys that should be handled by DB defaults
-    # We remove 'id', 'created_at', and 'updated_at' so Supabase generates them
-    data.pop('id', None)
-    
-    # 2. Set the owner and a default status
+    # 1. Clean data and attach user
     data["created_by"] = user_id
-    if "status" not in data or not data["status"]:
-        data["status"] = "active"
     
-    # 3. Explicitly remove event_embedding if it's empty/missing 
-    # to avoid 'vector' type mismatch errors
+    # 2. THE FIX: Force cost and max_capacity to be pure Integers
+    # Even if they come in as 0.0 or "0.0", this turns them into 0
+    if "cost" in data and data["cost"] is not None:
+        try:
+            data["cost"] = int(float(data["cost"]))
+        except (ValueError, TypeError):
+            data["cost"] = 0
+            
+    if "max_capacity" in data and data["max_capacity"] is not None:
+        try:
+            data["max_capacity"] = int(float(data["max_capacity"]))
+        except (ValueError, TypeError):
+            data["max_capacity"] = 50 # Default fallback
+
+    # 3. Final cleanup for other fields
+    data.pop('id', None)
     if "event_embedding" in data:
         data.pop("event_embedding")
 
-    try:
-        # 4. Insert into Supabase
-        response = supabase.table("events").insert(data).execute()
-        
-        if not response.data:
-            raise Exception("No data returned from database insert.")
-            
-        return response.data[0]
-        
-    except Exception as e:
-        # This will print the EXACT column error to your Render logs
-        print(f"SUPABASE ERROR: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database Error: {str(e)}"
-        )
+    # 4. Execute Insert
+    response = supabase.table("events").insert(data).execute()
+    return response.data[0]
 
 
 def get_event(event_id: str):
