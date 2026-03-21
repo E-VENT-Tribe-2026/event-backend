@@ -35,7 +35,7 @@ def create_event(user_id: str, data: dict):
 def get_event(event_id: str):
     response = (
         supabase.table("events")
-        .select("*, profiles(full_name, avatar_url), event_tags(tags(name))")
+        .select("*")
         .eq("id", event_id)
         .single()
         .execute()
