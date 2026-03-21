@@ -96,6 +96,28 @@ def delete_event(user_id: str, event_id: str):
     return {"message": "Event deleted successfully"}
 
 
+def get_all_events_by_user(user_id: str):
+    """Fetches every event owned by this user without pagination limits."""
+    try:
+        response = (
+            supabase.table("events")
+            .select("*, profiles(full_name, avatar_url)") 
+            .eq("created_by", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        
+        # We return the list directly or wrapped in a data object
+        return {
+            "status": "success",
+            "total_count": len(response.data) if response.data else 0,
+            "data": response.data or []
+        }
+    except Exception as e:
+        print(f"Error fetching all user events: {e}")
+        # Return an empty list so the frontend doesn't crash
+        return {"status": "error", "data": [], "message": str(e)}
+
 def list_events(
     page: int = 1,
     limit: int = 10,
