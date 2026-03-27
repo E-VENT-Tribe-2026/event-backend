@@ -8,6 +8,7 @@ from app.services.event_service import (
     delete_event,
     list_events,
     get_events_by_user,
+    get_all_events_by_user,
 )
 
 router = APIRouter()
@@ -25,7 +26,25 @@ def get_my_events(
     """Returns all events created by the authenticated user."""
     return get_events_by_user(user.id, page, limit)
 
+@router.get("/my-events")
+def get_all_my_events(user=Depends(get_current_user)):
+    """Return all events created by the logged-in user."""
 
+    user_id = getattr(user, "id", None) or user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid user")
+
+    try:
+        events_response = get_all_events_by_user(user_id)
+        return events_response
+
+    except Exception as e:
+        print(f"Internal error in /my-events: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not fetch events for user"
+        )
+    
 @router.get("/")
 def get_events(
     page: int = Query(1, ge=1),
@@ -44,13 +63,8 @@ def create_new_event(
     user=Depends(get_current_user)
 ):
     """Create a new event. Authenticated users only."""
-    return create_event(user.id, data.model_dump())
-
-
-@router.get("/{event_id}")
-def read_event(event_id: str):
-    """Get a single event by ID. Public endpoint."""
-    return get_event(event_id)
+    # CHANGE: Add mode="json" to convert datetimes to strings
+    return create_event(user.id, data.model_dump(mode="json"))
 
 
 @router.put("/{event_id}")
@@ -60,7 +74,14 @@ def update_existing_event(
     user=Depends(get_current_user)
 ):
     """Update an event. Only the creator can update."""
-    return update_event(user.id, event_id, data.model_dump(exclude_unset=True))
+    # CHANGE: Add mode="json" here as well
+    return update_event(user.id, event_id, data.model_dump(mode="json", exclude_unset=True))
+
+
+@router.get("/{event_id}")
+def read_event(event_id: str):
+    """Get a single event by ID. Public endpoint."""
+    return get_event(event_id)
 
 
 @router.delete("/{event_id}")

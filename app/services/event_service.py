@@ -5,29 +5,37 @@ from app.utils.embedding_helper import generate_embedding
 
 
 def create_event(user_id: str, data: dict):
+    # 1. Clean data and attach user
     data["created_by"] = user_id
+    
+    # 2. THE FIX: Force cost and max_capacity to be pure Integers
+    # Even if they come in as 0.0 or "0.0", this turns them into 0
+    if "cost" in data and data["cost"] is not None:
+        try:
+            data["cost"] = int(float(data["cost"]))
+        except (ValueError, TypeError):
+            data["cost"] = 0
+            
+    if "max_capacity" in data and data["max_capacity"] is not None:
+        try:
+            data["max_capacity"] = int(float(data["max_capacity"]))
+        except (ValueError, TypeError):
+            data["max_capacity"] = 50 # Default fallback
 
-    # Generate embedding from title + description for AI recommendations
-    text_for_embedding = f"{data.get('title', '')} {data.get('description', '')} {data.get('category', '')}"
-    embedding = generate_embedding(text_for_embedding)
-    if embedding:
-        data["event_embedding"] = embedding
+    # 3. Final cleanup for other fields
+    data.pop('id', None)
+    if "event_embedding" in data:
+        data.pop("event_embedding")
 
+    # 4. Execute Insert
     response = supabase.table("events").insert(data).execute()
-
-    if not response.data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Event creation failed"
-        )
-
     return response.data[0]
 
 
 def get_event(event_id: str):
     response = (
         supabase.table("events")
-        .select("*, profiles(full_name, avatar_url), event_tags(tags(name))")
+        .select("*")
         .eq("id", event_id)
         .single()
         .execute()
@@ -87,6 +95,37 @@ def delete_event(user_id: str, event_id: str):
 
     return {"message": "Event deleted successfully"}
 
+
+def get_all_events_by_user(user_id: str):
+    """Fetches every event owned by this user without pagination limits."""
+    
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID is required")
+
+    try:
+        response = (
+            supabase
+            .table("events")
+            .select("*")
+            .eq("created_by", str(user_id))
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        event_list = response.data if response.data else []
+
+        return {
+            "status": "success",
+            "total_count": len(event_list),
+            "data": event_list
+        }
+
+    except Exception as e:
+        print(f"Error fetching user events: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database Crash: {str(e)}"
+        )
 
 def list_events(
     page: int = 1,

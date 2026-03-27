@@ -1,10 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
-from app.db.database import engine, Base #
+from app.db.database import engine, Base
 
-# This ensures your SQLAlchemy models are recognized, 
-# even though the tables are created manually.
+# SQLAlchemy bind
 Base.metadata.bind = engine 
 
 app = FastAPI(
@@ -12,27 +11,27 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Without this, the Vercel frontend will be blocked from talking to Render.
+# FIXED CORS: Explicitly allowing headers for compatibility
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace "*" with the Vercel URL
+    allow_origins=["*"], 
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
+    expose_headers=["*"],
 )
 
-# Include  routes
+# Include routes
 app.include_router(api_router, prefix="/api")
 
 @app.get("/")
 def root():
-    return {"message": "E-VENT Backend is running on Render"}
-
-@app.get("/")
-def read_root():
-    return {"status": "E-VENT Orchestrator is Online", "docs": "/docs"}
+    return {
+        "status": "E-VENT Orchestrator is Online", 
+        "message": "Backend is running on Render",
+        "docs": "/docs"
+    }
 
 @app.get("/health")
 def health_check():
-
     return {"status": "healthy"}
