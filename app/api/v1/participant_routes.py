@@ -5,6 +5,7 @@ from app.services.participant_service import (
     leave_event,
     get_event_attendees,
     remove_participant,
+    get_attended_events,
 )
 
 router = APIRouter()
@@ -53,3 +54,14 @@ def remove_participant_api(
     Only the event organizer can perform this action.
     """
     return remove_participant(user.id, event_id, participant_id)
+
+
+@router.get("/attended/my-events")
+def get_attended_events_api(
+    user=Depends(get_current_user),
+):
+    """
+    Returns events the authenticated user has joined,
+    grouped into upcoming and past based on end_datetime.
+    """
+    return get_attended_events(user.id)

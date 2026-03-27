@@ -1,4 +1,5 @@
 from fastapi import HTTPException
+from datetime import datetime, timezone
 from app.db.supabase_client import supabase
 
 
@@ -141,4 +142,80 @@ def remove_participant(organizer_id: str, event_id: str, target_user_id: str) ->
         "message": "Participant removed successfully.",
         "event_id": event_id,
         "removed_user_id": target_user_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Get attended events  (upcoming / past)
+# ---------------------------------------------------------------------------
+
+def get_attended_events(user_id: str) -> dict:
+    """
+    Returns events the user has joined via event_participants,
+    split into upcoming and past based on whether end_datetime has passed.
+    Does not include events the user created.
+    """
+    # Fetch all participation rows with full event data for this user
+    response = (
+        supabase.table("event_participants")
+        .select(
+            "status, created_at, "
+            "events(id, title, description, category, cost, max_capacity, status, "
+            "start_datetime, end_datetime, location_name, latitude, longitude, "
+            "created_by, created_at, updated_at)"
+        )
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    rows = response.data or []
+    now = datetime.now(timezone.utc)
+
+    upcoming = []
+    past = []
+
+    for row in rows:
+        event = row.get("events")
+        if not event:
+            continue
+
+        # Skip cancelled events
+        if event.get("status") == "cancelled":
+            continue
+
+        # Parse end_datetime — Supabase returns ISO strings with tz info
+        end_str = event.get("end_datetime")
+        if not end_str:
+            continue
+
+        try:
+            end_dt = datetime.fromisoformat(end_str)
+            # Ensure tz-aware for comparison
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+        # Attach participation metadata to the event payload
+        event["participation_status"] = row.get("status")
+        event["joined_at"] = row.get("created_at")
+
+        if end_dt > now:
+            upcoming.append(event)
+        else:
+            past.append(event)
+
+    # Upcoming: soonest first; Past: most recent first
+    upcoming.sort(key=lambda e: e["end_datetime"])
+    past.sort(key=lambda e: e["end_datetime"], reverse=True)
+
+    return {
+        "upcoming": {
+            "total_count": len(upcoming),
+            "data": upcoming,
+        },
+        "past": {
+            "total_count": len(past),
+            "data": past,
+        },
     }
