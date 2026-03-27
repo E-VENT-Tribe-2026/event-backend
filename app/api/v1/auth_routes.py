@@ -10,8 +10,11 @@ router = APIRouter()
 def register(data: RegisterRequest):
     return register_user(
         email=data.email,
-        password=data.password,
-        full_name=data.full_name
+        password=data.password, 
+        full_name=data.full_name,
+        dob=data.dob.isoformat(), 
+        gender=data.gender,
+        interests=data.interests
     )
 
 @router.post("/login")
