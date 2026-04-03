@@ -167,7 +167,7 @@ def list_events(
     }
 
 
-def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
+'''def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
     start = (page - 1) * limit
     end = start + limit - 1
 
@@ -185,3 +185,4 @@ def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
         "limit": limit,
         "data": response.data
     }
+'''

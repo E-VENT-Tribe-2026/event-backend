@@ -7,7 +7,6 @@ from app.services.event_service import (
     update_event,
     delete_event,
     list_events,
-    get_events_by_user,
     get_all_events_by_user,
 )
 
@@ -16,8 +15,9 @@ router = APIRouter()
 
 # IMPORTANT: Static routes (/me, /my) must be declared BEFORE dynamic routes (/{event_id})
 # to prevent FastAPI from treating "me" as an event_id.
+# The /my-events route is kept separate to avoid limiter issues with the /my route, which is more likely to be used frequently by the same user.
 
-@router.get("/my")
+'''@router.get("/my")
 def get_my_events(
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=50),
@@ -25,6 +25,7 @@ def get_my_events(
 ):
     """Returns all events created by the authenticated user."""
     return get_events_by_user(user.id, page, limit)
+'''
 
 @router.get("/my-events")
 def get_all_my_events(user=Depends(get_current_user)):
@@ -44,7 +45,8 @@ def get_all_my_events(user=Depends(get_current_user)):
             status_code=500,
             detail="Could not fetch events for user"
         )
-    
+
+
 @router.get("/")
 def get_events(
     page: int = Query(1, ge=1),
