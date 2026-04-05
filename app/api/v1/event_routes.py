@@ -49,14 +49,15 @@ def get_all_my_events(user=Depends(get_current_user)):
 
 @router.get("/")
 def get_events(
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, le=50),
+    page: int = Query(1),
+    limit: int = Query(10),
     category: str | None = None,
     upcoming: bool = False,
     search: str | None = None,
+    date: str | None = None,
+    city: str | None = None,
 ):
-    """List events with optional filters. Public endpoint."""
-    return list_events(page, limit, category, upcoming, search)
+    return list_events(page, limit, category, upcoming, search, date, city)
 
 
 @router.post("/")
@@ -93,3 +94,8 @@ def delete_existing_event(
 ):
     """Delete an event. Only the creator can delete."""
     return delete_event(user.id, event_id)
+
+@router.patch("/{event_id}/cancel")
+def cancel_existing_event(event_id: str, user=Depends(get_current_user)):
+    from app.services.event_service import cancel_event
+    return cancel_event(user.id, event_id)
