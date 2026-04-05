@@ -114,6 +114,19 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             update_data["event_embedding"] = embedding
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    # Fix numeric fields for PostgreSQL bigint
+    if "cost" in update_data and update_data["cost"] is not None:
+        try:
+            update_data["cost"] = int(float(update_data["cost"]))
+        except (ValueError, TypeError):
+            update_data["cost"] = 0
+
+    if "max_capacity" in update_data and update_data["max_capacity"] is not None:
+        try:
+            update_data["max_capacity"] = int(float(update_data["max_capacity"]))
+        except (ValueError, TypeError):
+            update_data["max_capacity"] = 50
 
     response = supabase.table("events") \
         .update(update_data) \
