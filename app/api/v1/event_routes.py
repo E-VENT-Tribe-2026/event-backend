@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from app.core.dependencies import get_current_user
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
+from fastapi import HTTPException
 from app.services.event_service import (
     create_event,
     get_event,
