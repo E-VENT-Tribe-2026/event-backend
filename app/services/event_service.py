@@ -42,6 +42,7 @@ def create_event(user_id: str, data: dict):
     # 3. Cleanup
     data.pop('id', None)
     data.pop("event_embedding", None)
+    data["status"] = "active"
 
     # 4. Generate embedding
     embedding_text = " ".join(filter(None, [
@@ -230,6 +231,8 @@ def list_events(
     date: str | None = None,
     city: str | None = None,
 ):
+    now = datetime.now(timezone.utc).isoformat()
+
     # If search query provided, use semantic search
     if search:
         embedding = generate_embedding(search)
@@ -239,10 +242,17 @@ def list_events(
                 "query_text": search,
                 "match_count": limit
             }).execute()
+
+            data = [
+                e for e in (response.data or [])
+                if e.get("end_datetime", "") >= now
+                and e.get("status") == "active"
+            ]
+
             return {
                 "page": page,
                 "limit": limit,
-                "data": response.data or []
+                "data": data
             }
 
     # Otherwise standard filtered query
@@ -252,7 +262,8 @@ def list_events(
         "created_by, created_at, updated_at"
     )
 
-    query = query.neq("status", "cancelled")
+    query = query.eq("status", "active")
+    query = query.gte("end_datetime", now)
 
     if date:
         query = query.gte("start_datetime", date)
@@ -261,7 +272,7 @@ def list_events(
     if category:
         query = query.eq("category", category)
     if upcoming:
-        query = query.gt("start_datetime", datetime.now(timezone.utc).isoformat())
+        query = query.gt("start_datetime", now)
         query = query.order("start_datetime", desc=False)
     else:
         query = query.order("created_at", desc=True)
@@ -275,8 +286,7 @@ def list_events(
         "page": page,
         "limit": limit,
         "data": response.data
-    }    
-
+    }
     
 def cancel_event(user_id: str, event_id: str):
     event = get_event(event_id)
