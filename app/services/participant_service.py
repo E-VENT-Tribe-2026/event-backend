@@ -52,3 +52,17 @@ def get_event_participants(event_id: str):
     )
 
     return response.data
+
+def get_my_events(user_id: str):
+    response = supabase.table("event_participants") \
+        .select("event_id, events(*)") \
+        .eq("user_id", user_id) \
+        .execute()
+    return response.data or []  
+
+def get_my_events(user_id: str):
+    response = supabase.table("event_participants") \
+        .select("event_id, events(*)") \
+        .eq("user_id", user_id) \
+        .execute()
+    return response.data or []

@@ -5,7 +5,8 @@ from app.db.supabase_client import supabase
 from app.services.participant_service import (
     join_event,
     leave_event,
-    get_event_participants
+    get_event_participants,
+    get_my_events
 )
 
 router = APIRouter()
@@ -47,3 +48,8 @@ def remove_participant(event_id: str, participant_id: str, user=Depends(get_curr
         .execute()
 
     return {"message": "Participant removed"}
+
+@router.get("/my/events")
+def my_events(user=Depends(get_current_user)):
+    return get_my_events(user.id)
+
