@@ -4,15 +4,24 @@ from typing import Optional
 class Settings(BaseSettings):
     PROJECT_NAME: str = "E-VENT Orchestrator"
     
-    # By defining these without defaults, Pydantic will RAISE an error 
-    # automatically if they aren't found in your .env
+    # Existing required fields
     DATABASE_URL: str
     SUPABASE_URL: str
     SUPABASE_SERVICE_KEY: str
 
-    class Config:
-        env_file = ".env" #
-        case_sensitive = True
+    # Add these missing fields to match your .env
+    SUPABASE_JWT_SECRET: str
+    BACKEND_URL: str
+    FRONTEND_URL: str
+    
+    # Optional: If you have the Mixedbread key in .env, add it here too
+    MXBAI_API_KEY: Optional[str] = None
 
-# This will now throw a clear ValidationError if your .env is wrong
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+        # This prevents the "extra_forbidden" error by ignoring 
+        # any .env variables not defined above.
+        extra = "ignore" 
+
 settings = Settings()

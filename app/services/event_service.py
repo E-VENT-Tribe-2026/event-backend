@@ -41,10 +41,19 @@ def create_event(user_id: str, data: dict):
 
     # 3. Cleanup
     data.pop('id', None)
-    if "event_embedding" in data:
-        data.pop("event_embedding")
+    data.pop("event_embedding", None)
 
-    # 4. Insert event
+    # 4. Generate embedding
+    embedding_text = " ".join(filter(None, [
+        data.get("title"),
+        data.get("description"),
+        data.get("category"),
+    ]))
+    embedding = generate_embedding(embedding_text)
+    if embedding:
+        data["event_embedding"] = embedding
+
+    # 5. Insert event
     response = supabase.table("events").insert(data).execute()
 
     if not response.data:
@@ -67,7 +76,6 @@ def create_event(user_id: str, data: dict):
         print("Participant insert failed:", str(e))
 
     return event
-
 
 def get_event(event_id: str):
     response = (
@@ -212,7 +220,7 @@ def get_all_events_by_user(user_id: str):
             detail=f"Database Crash: {str(e)}"
         )
 
-    
+
 def list_events(
     page: int = 1,
     limit: int = 10,
@@ -222,32 +230,41 @@ def list_events(
     date: str | None = None,
     city: str | None = None,
 ):
-    
+    # If search query provided, use semantic search
+    if search:
+        embedding = generate_embedding(search)
+        if embedding:
+            response = supabase.rpc("search_events", {
+                "query_embedding": embedding,
+                "query_text": search,
+                "match_count": limit
+            }).execute()
+            return {
+                "page": page,
+                "limit": limit,
+                "data": response.data or []
+            }
+
+    # Otherwise standard filtered query
     query = supabase.table("events").select(
         "id, title, description, category, cost, max_capacity, status, "
         "start_datetime, end_datetime, location_name, latitude, longitude, "
         "created_by, created_at, updated_at"
     )
 
-    # Filter out cancelled/inactive events by default
     query = query.neq("status", "cancelled")
+
     if date:
         query = query.gte("start_datetime", date)
-
     if city:
         query = query.ilike("location_name", f"%{city}%")
-
     if category:
         query = query.eq("category", category)
-
     if upcoming:
         query = query.gt("start_datetime", datetime.now(timezone.utc).isoformat())
         query = query.order("start_datetime", desc=False)
     else:
         query = query.order("created_at", desc=True)
-
-    if search:
-        query = query.ilike("title", f"%{search}%")
 
     start = (page - 1) * limit
     end = start + limit - 1
@@ -258,8 +275,8 @@ def list_events(
         "page": page,
         "limit": limit,
         "data": response.data
-    }
-    
+    }    
+
     
 def cancel_event(user_id: str, event_id: str):
     event = get_event(event_id)
@@ -316,3 +333,4 @@ def cancel_event(user_id: str, event_id: str):
         "data": response.data
     }
 '''
+
