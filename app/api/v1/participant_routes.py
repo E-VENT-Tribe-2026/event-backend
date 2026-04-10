@@ -30,3 +30,18 @@ def leave_event_api(
 def participants_api(event_id: str):
 
     return get_event_participants(event_id)
+
+@router.delete("/{event_id}/participants/{participant_id}")
+def remove_participant(event_id: str, participant_id: str, user=Depends(get_current_user)):
+    event = get_event(event_id)
+
+    if event["created_by"] != user.id:
+        raise HTTPException(status_code=403, detail="Only the event owner can remove participants")
+
+    supabase.table("event_participants") \
+        .delete() \
+        .eq("event_id", event_id) \
+        .eq("user_id", participant_id) \
+        .execute()
+
+    return {"message": "Participant removed"}
