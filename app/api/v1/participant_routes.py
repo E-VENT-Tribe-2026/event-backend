@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from app.core.dependencies import get_current_user
+from app.services.event_service import get_event
 from app.services.participant_service import (
     join_event,
     leave_event,
