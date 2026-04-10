@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException
 from app.core.dependencies import get_current_user
 from app.services.event_service import get_event
+from app.db.supabase_client import supabase
 from app.services.participant_service import (
     join_event,
     leave_event,
