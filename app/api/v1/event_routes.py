@@ -9,6 +9,7 @@ from app.services.event_service import (
     delete_event,
     list_events,
     get_all_events_by_user,
+
 )
 
 router = APIRouter()
@@ -100,3 +101,4 @@ def delete_existing_event(
 def cancel_existing_event(event_id: str, user=Depends(get_current_user)):
     from app.services.event_service import cancel_event
     return cancel_event(user.id, event_id)
+

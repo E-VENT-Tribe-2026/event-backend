@@ -29,7 +29,7 @@ api_router.include_router(
 
 api_router.include_router(
     saved_event_routes.router,
-    prefix="/saved-events",
+    prefix="/favorites",
     tags=["Saved Events"]
 )
 
