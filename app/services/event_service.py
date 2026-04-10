@@ -42,6 +42,7 @@ def create_event(user_id: str, data: dict):
     # 3. Cleanup
     data.pop('id', None)
     data.pop("event_embedding", None)
+    data["status"] = "active"
 
     # 4. Generate embedding
     embedding_text = " ".join(filter(None, [
@@ -242,8 +243,11 @@ def list_events(
                 "match_count": limit
             }).execute()
 
-            # Filter out past events from semantic results
-            data = [e for e in (response.data or []) if e.get("end_datetime", "") >= now]
+            data = [
+                e for e in (response.data or [])
+                if e.get("end_datetime", "") >= now
+                and e.get("status") == "active"
+            ]
 
             return {
                 "page": page,
@@ -258,8 +262,8 @@ def list_events(
         "created_by, created_at, updated_at"
     )
 
-    query = query.neq("status", "cancelled")
-    query = query.gte("end_datetime", now)  # exclude past events
+    query = query.eq("status", "active")
+    query = query.gte("end_datetime", now)
 
     if date:
         query = query.gte("start_datetime", date)
