@@ -29,14 +29,19 @@ jobs:
 
     - name: Run tests with pytest
       env:
-        # Provide dummy values so Pydantic doesn't crash during initialization
-        SUPABASE_URL: "https://mock.supabase.co"
-        SUPABASE_SERVICE_KEY: "mock-service-key"
+        # URL must be a valid-looking URL
+        SUPABASE_URL: "https://ididimlxgu.supabase.co" 
+        
+        # KEY must look like a JWT (three parts separated by dots)
+        # This is a fake key, but it follows the required format
+        SUPABASE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlkZWRpbWx4Z3UiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTYyMDY4MTYwMCwiZXhwIjoyNTI0NjA4MDAwfQ.mock-signature"
+        
+        # These can stay as they were
         DATABASE_URL: "postgresql://user:pass@localhost:5432/db"
-        MXBAI_API_KEY: "mock-key"
-        # Include these because your error log listed them as missing too
-        SUPABASE_JWT_SECRET: "mock-secret"
+        SUPABASE_SERVICE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.mock-signature"
+        SUPABASE_JWT_SECRET: "mock-secret-at-least-32-characters-long"
         BACKEND_URL: "http://localhost:8000"
         FRONTEND_URL: "http://localhost:3000"
+        MXBAI_API_KEY: "mock-key"
       run: |
         pytest
