@@ -85,7 +85,7 @@ class TestRegisterUser:
     @patch("app.services.auth_service.supabase")
     def test_register_auth_api_error_raises_400(self, mock_sb):
         from gotrue.errors import AuthApiError
-        mock_sb.auth.sign_up.side_effect = AuthApiError("email taken", 400, {})
+        mock_sb.auth.sign_up.side_effect = AuthApiError("email taken", status=400)
 
         from app.services.auth_service import register_user
         with pytest.raises(HTTPException) as exc:
