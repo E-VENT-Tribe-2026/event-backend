@@ -29,9 +29,14 @@ jobs:
 
     - name: Run tests with pytest
       env:
-        # These allow the app to initialize without crashing
-        SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://mock.supabase.co' }}
-        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || 'mock-key' }}
-        OPENAI_API_KEY: "mock-key"
+        # Provide dummy values so Pydantic doesn't crash during initialization
+        SUPABASE_URL: "https://mock.supabase.co"
+        SUPABASE_SERVICE_KEY: "mock-service-key"
+        DATABASE_URL: "postgresql://user:pass@localhost:5432/db"
+        MXBAI_API_KEY: "mock-key"
+        # Include these because your error log listed them as missing too
+        SUPABASE_JWT_SECRET: "mock-secret"
+        BACKEND_URL: "http://localhost:8000"
+        FRONTEND_URL: "http://localhost:3000"
       run: |
         pytest
