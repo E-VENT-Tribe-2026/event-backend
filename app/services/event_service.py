@@ -324,6 +324,22 @@ def cancel_event(user_id: str, event_id: str):
 
     return {"message": "Event cancelled"}
 
+
+def get_max_event_price():  # Make sure the name is exactly this
+    try:
+        response = supabase.table("events") \
+            .select("cost") \
+            .order("cost", desc=True) \
+            .limit(1) \
+            .execute()
+        
+        if response.data and len(response.data) > 0:
+            return response.data[0].get("cost", 0)
+        return 0
+    except Exception as e:
+        print(f"Database error in get_max_event_price: {e}")
+        return 0
+
 '''def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
     start = (page - 1) * limit
     end = start + limit - 1

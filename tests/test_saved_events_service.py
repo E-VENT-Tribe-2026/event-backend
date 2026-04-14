@@ -5,7 +5,7 @@ from app.services.saved_event_service import save_event, remove_saved_event, get
 
 
 class TestSaveEvent:
-    @patch("app.services.saved_events_service.supabase")
+    @patch("app.services.saved_event_service.supabase")
     def test_save_success(self, mock_sb):
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -22,7 +22,7 @@ class TestSaveEvent:
 
         assert result["message"] == "Event saved"
 
-    @patch("app.services.saved_events_service.supabase")
+    @patch("app.services.saved_event_service.supabase")
     def test_save_duplicate_raises_400(self, mock_sb):
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -37,7 +37,7 @@ class TestSaveEvent:
 
 
 class TestRemoveSavedEvent:
-    @patch("app.services.saved_events_service.supabase")
+    @patch("app.services.saved_event_service.supabase")
     def test_remove_returns_message(self, mock_sb):
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -50,7 +50,7 @@ class TestRemoveSavedEvent:
         assert result["message"] == "Removed from saved events"
         chain.delete.assert_called_once()
 
-    @patch("app.services.saved_events_service.supabase")
+    @patch("app.services.saved_event_service.supabase")
     def test_remove_filters_by_user_and_event(self, mock_sb):
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -66,7 +66,7 @@ class TestRemoveSavedEvent:
 
 
 class TestGetSavedEvents:
-    @patch("app.services.saved_events_service.supabase")
+    @patch("app.services.saved_event_service.supabase")
     def test_returns_event_objects(self, mock_sb):
         rows = [
             {"events": {"id": "e1", "title": "Party"}},
@@ -84,7 +84,7 @@ class TestGetSavedEvents:
         assert result[0] == {"id": "e1", "title": "Party"}
         assert result[1] == {"id": "e2", "title": "Concert"}
 
-    @patch("app.services.saved_events_service.supabase")
+    @patch("app.services.saved_event_service.supabase")
     def test_returns_empty_list(self, mock_sb):
         chain = MagicMock()
         mock_sb.table.return_value = chain
