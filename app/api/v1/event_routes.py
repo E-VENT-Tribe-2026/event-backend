@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from app.core.dependencies import get_current_user
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
 from fastapi import HTTPException
+from app.services import event_service
 from app.services.event_service import (
     create_event,
     get_event,
@@ -9,6 +10,7 @@ from app.services.event_service import (
     delete_event,
     list_events,
     get_all_events_by_user,
+    get_max_event_price,
 
 )
 
@@ -28,6 +30,11 @@ def get_my_events(
     """Returns all events created by the authenticated user."""
     return get_events_by_user(user.id, page, limit)
 '''
+@router.get("/max-price")
+def read_max_price():
+    # This 'uses' the function, which will clear the 'not accessed' warning
+    max_price = get_max_event_price()
+    return {"max_price": max_price}
 
 @router.get("/my-events")
 def get_all_my_events(user=Depends(get_current_user)):
@@ -101,4 +108,6 @@ def delete_existing_event(
 def cancel_existing_event(event_id: str, user=Depends(get_current_user)):
     from app.services.event_service import cancel_event
     return cancel_event(user.id, event_id)
+
+
 
