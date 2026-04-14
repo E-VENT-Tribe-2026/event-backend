@@ -71,7 +71,6 @@ Create a `.env` file:
 
 SUPABASE_URL=your_project_url
 SUPABASE_SERVICE_KEY=your_service_role_key
-OPENAI_API_KEY=your_openai_key
 
 ```
 

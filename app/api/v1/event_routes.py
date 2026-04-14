@@ -1,14 +1,15 @@
 from fastapi import APIRouter, Depends, Query
 from app.core.dependencies import get_current_user
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
+from fastapi import HTTPException
 from app.services.event_service import (
     create_event,
     get_event,
     update_event,
     delete_event,
     list_events,
-    get_events_by_user,
     get_all_events_by_user,
+
 )
 
 router = APIRouter()
@@ -16,8 +17,9 @@ router = APIRouter()
 
 # IMPORTANT: Static routes (/me, /my) must be declared BEFORE dynamic routes (/{event_id})
 # to prevent FastAPI from treating "me" as an event_id.
+# The /my-events route is kept separate to avoid limiter issues with the /my route, which is more likely to be used frequently by the same user.
 
-@router.get("/my")
+'''@router.get("/my")
 def get_my_events(
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=50),
@@ -25,6 +27,7 @@ def get_my_events(
 ):
     """Returns all events created by the authenticated user."""
     return get_events_by_user(user.id, page, limit)
+'''
 
 @router.get("/my-events")
 def get_all_my_events(user=Depends(get_current_user)):
@@ -44,17 +47,19 @@ def get_all_my_events(user=Depends(get_current_user)):
             status_code=500,
             detail="Could not fetch events for user"
         )
-    
+
+
 @router.get("/")
 def get_events(
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, le=50),
+    page: int = Query(1),
+    limit: int = Query(10),
     category: str | None = None,
     upcoming: bool = False,
     search: str | None = None,
+    date: str | None = None,
+    city: str | None = None,
 ):
-    """List events with optional filters. Public endpoint."""
-    return list_events(page, limit, category, upcoming, search)
+    return list_events(page, limit, category, upcoming, search, date, city)
 
 
 @router.post("/")
@@ -91,3 +96,9 @@ def delete_existing_event(
 ):
     """Delete an event. Only the creator can delete."""
     return delete_event(user.id, event_id)
+
+@router.patch("/{event_id}/cancel")
+def cancel_existing_event(event_id: str, user=Depends(get_current_user)):
+    from app.services.event_service import cancel_event
+    return cancel_event(user.id, event_id)
+

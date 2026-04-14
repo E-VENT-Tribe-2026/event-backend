@@ -2,14 +2,31 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
+from app.services.notification_service import create_notification
 
+def validate_coordinates(lat, lng):
+    if lat is None or lng is None:
+        return
+
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid coordinates format")
+
+    if not (-90 <= lat <= 90):
+        raise HTTPException(status_code=400, detail="Invalid latitude")
+
+    if not (-180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="Invalid longitude")
+    
 
 def create_event(user_id: str, data: dict):
     # 1. Clean data and attach user
     data["created_by"] = user_id
-    
-    # 2. THE FIX: Force cost and max_capacity to be pure Integers
-    # Even if they come in as 0.0 or "0.0", this turns them into 0
+    validate_coordinates(data.get("latitude"), data.get("longitude"))
+
+    # 2. Fix numeric fields
     if "cost" in data and data["cost"] is not None:
         try:
             data["cost"] = int(float(data["cost"]))
@@ -20,17 +37,46 @@ def create_event(user_id: str, data: dict):
         try:
             data["max_capacity"] = int(float(data["max_capacity"]))
         except (ValueError, TypeError):
-            data["max_capacity"] = 50 # Default fallback
+            data["max_capacity"] = 50
 
-    # 3. Final cleanup for other fields
+    # 3. Cleanup
     data.pop('id', None)
-    if "event_embedding" in data:
-        data.pop("event_embedding")
+    data.pop("event_embedding", None)
+    data["status"] = "active"
 
-    # 4. Execute Insert
+    # 4. Generate embedding
+    embedding_text = " ".join(filter(None, [
+        data.get("title"),
+        data.get("description"),
+        data.get("category"),
+    ]))
+    embedding = generate_embedding(embedding_text)
+    if embedding:
+        data["event_embedding"] = embedding
+
+    # 5. Insert event
     response = supabase.table("events").insert(data).execute()
-    return response.data[0]
 
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Event creation failed")
+
+    event = response.data[0]
+    event_id = event["id"]
+
+    print("EVENT CREATED:", event_id)
+
+    try:
+        supabase.table("event_participants").insert({
+            "user_id": user_id,
+            "event_id": event_id
+        }).execute()
+
+        print("CREATOR ADDED AS PARTICIPANT")
+
+    except Exception as e:
+        print("Participant insert failed:", str(e))
+
+    return event
 
 def get_event(event_id: str):
     response = (
@@ -51,7 +97,14 @@ def get_event(event_id: str):
 
 
 def update_event(user_id: str, event_id: str, update_data: dict):
+    print("UPDATE EVENT CALLED")
+
     event = get_event(event_id)
+
+    validate_coordinates(
+        update_data.get("latitude"),
+        update_data.get("longitude")
+    )
 
     if event["created_by"] != user_id:
         raise HTTPException(
@@ -59,7 +112,7 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             detail="Not authorized to update this event"
         )
 
-    # Regenerate embedding if title or description changed
+    # Regenerate embedding if needed
     if "title" in update_data or "description" in update_data or "category" in update_data:
         title = update_data.get("title", event.get("title", ""))
         description = update_data.get("description", event.get("description", ""))
@@ -70,8 +123,24 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             update_data["event_embedding"] = embedding
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    # Fix numeric fields for PostgreSQL bigint
+    if "cost" in update_data and update_data["cost"] is not None:
+        try:
+            update_data["cost"] = int(float(update_data["cost"]))
+        except (ValueError, TypeError):
+            update_data["cost"] = 0
 
-    response = supabase.table("events").update(update_data).eq("id", event_id).execute()
+    if "max_capacity" in update_data and update_data["max_capacity"] is not None:
+        try:
+            update_data["max_capacity"] = int(float(update_data["max_capacity"]))
+        except (ValueError, TypeError):
+            update_data["max_capacity"] = 50
+
+    response = supabase.table("events") \
+        .update(update_data) \
+        .eq("id", event_id) \
+        .execute()
 
     if not response.data:
         raise HTTPException(
@@ -79,8 +148,33 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             detail="Event update failed"
         )
 
-    return response.data[0]
+    print("EVENT UPDATED SUCCESSFULLY")
 
+    participants = supabase.table("event_participants") \
+        .select("user_id") \
+        .eq("event_id", event_id) \
+        .execute()
+
+    print("Participants:", participants.data)
+
+    create_notification(
+        user_id,
+        event_id,
+        "event_updated",
+        f"Your event '{event['title']}' has been updated"
+    )
+
+    for p in participants.data:
+        print("Creating notification for:", p["user_id"])
+
+        create_notification(
+            p["user_id"],
+            event_id,
+            "event_updated",
+            f"Event '{event['title']}' has been updated"
+        )
+
+    return response.data[0]
 
 def delete_event(user_id: str, event_id: str):
     event = get_event(event_id)
@@ -127,33 +221,61 @@ def get_all_events_by_user(user_id: str):
             detail=f"Database Crash: {str(e)}"
         )
 
+
 def list_events(
     page: int = 1,
     limit: int = 10,
     category: str | None = None,
     upcoming: bool = False,
     search: str | None = None,
+    date: str | None = None,
+    city: str | None = None,
 ):
+    now = datetime.now(timezone.utc).isoformat()
+
+    # If search query provided, use semantic search
+    if search:
+        embedding = generate_embedding(search)
+        if embedding:
+            response = supabase.rpc("search_events", {
+                "query_embedding": embedding,
+                "query_text": search,
+                "match_count": limit
+            }).execute()
+
+            data = [
+                e for e in (response.data or [])
+                if e.get("end_datetime", "") >= now
+                and e.get("status") == "active"
+            ]
+
+            return {
+                "page": page,
+                "limit": limit,
+                "data": data
+            }
+
+    # Otherwise standard filtered query
     query = supabase.table("events").select(
         "id, title, description, category, cost, max_capacity, status, "
         "start_datetime, end_datetime, location_name, latitude, longitude, "
         "created_by, created_at, updated_at"
     )
 
-    # Filter out cancelled/inactive events by default
-    query = query.neq("status", "cancelled")
+    query = query.eq("status", "active")
+    query = query.gte("end_datetime", now)
 
+    if date:
+        query = query.gte("start_datetime", date)
+    if city:
+        query = query.ilike("location_name", f"%{city}%")
     if category:
         query = query.eq("category", category)
-
     if upcoming:
-        query = query.gt("start_datetime", datetime.now(timezone.utc).isoformat())
+        query = query.gt("start_datetime", now)
         query = query.order("start_datetime", desc=False)
     else:
         query = query.order("created_at", desc=True)
-
-    if search:
-        query = query.ilike("title", f"%{search}%")
 
     start = (page - 1) * limit
     end = start + limit - 1
@@ -165,9 +287,44 @@ def list_events(
         "limit": limit,
         "data": response.data
     }
+    
+def cancel_event(user_id: str, event_id: str):
+    event = get_event(event_id)
 
+    if event["created_by"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
 
-def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
+    # mark cancelled
+    supabase.table("events") \
+        .update({"status": "cancelled"}) \
+        .eq("id", event_id) \
+        .execute()
+
+    # remove participants
+    participants = supabase.table("event_participants") \
+        .select("user_id") \
+        .eq("event_id", event_id) \
+        .execute()
+
+    supabase.table("event_participants") \
+        .delete() \
+        .eq("event_id", event_id) \
+        .execute()
+
+    # notify
+    from app.services.notification_service import create_notification
+
+    for p in participants.data:
+        create_notification(
+            p["user_id"],
+            event_id,
+            "event_cancelled",
+            f"Event '{event['title']}' has been cancelled"
+        )
+
+    return {"message": "Event cancelled"}
+
+'''def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
     start = (page - 1) * limit
     end = start + limit - 1
 
@@ -185,3 +342,5 @@ def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):
         "limit": limit,
         "data": response.data
     }
+'''
+
