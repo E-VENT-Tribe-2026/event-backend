@@ -2,6 +2,7 @@ from fastapi import HTTPException, status
 from openai import APIError
 from app.db.supabase_client import supabase
 from gotrue.errors import AuthApiError
+from app.utils.embedding_helper import generate_embedding
 
 def register_user(
     email: str, 
@@ -12,13 +13,12 @@ def register_user(
     full_name: str | None = None
 ):
     try:
-        
         auth_response = supabase.auth.sign_up({
             "email": email,
             "password": password,
             "options": {
                 "data": {
-                    "full_name": full_name  # Stores name in auth metadata
+                    "full_name": full_name
                 }
             }
         })
@@ -28,16 +28,25 @@ def register_user(
 
         user_id = auth_response.user.id
 
- 
+        # Generate interest embedding
+        interest_embedding = None
+        if interests:
+            embedding_text = " ".join(interests)
+            interest_embedding = generate_embedding(embedding_text)
+
+        profile_data = {
+            "dob": dob,
+            "gender": gender,
+            "interests": interests,
+            "full_name": full_name,
+        }
+
+        if interest_embedding:
+            profile_data["interest_embedding"] = interest_embedding
 
         profile_response = (
             supabase.table("profiles")
-            .update({
-                "dob": dob,
-                "gender": gender,
-                "interests": interests,
-                "full_name": full_name,
-            })
+            .update(profile_data)
             .eq("id", user_id)
             .execute()
         )
@@ -56,12 +65,13 @@ def register_user(
     
     except APIError as e:
         if "age_18_or_older" in str(e):
-            
             raise HTTPException(
                 status_code=400, 
                 detail="Registration blocked: You must be 18 or older."
             )
         raise HTTPException(status_code=400, detail=f"Database Error: {str(e)}")
+    
+    
 def login_user(email: str, password: str):
     response = supabase.auth.sign_in_with_password({
         "email": email,
