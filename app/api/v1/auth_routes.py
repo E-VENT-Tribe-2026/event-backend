@@ -1,7 +1,15 @@
 from fastapi import APIRouter, Depends
 from app.schemas.auth_schema import RegisterRequest, LoginRequest
-from app.services.auth_service import register_user, login_user
+from app.services.auth_service import register_user, login_user, request_password_reset, reset_password
 from app.core.dependencies import get_current_user
+from pydantic import BaseModel, EmailStr
+
+class PasswordResetRequestBody(BaseModel):
+    email: EmailStr
+
+class PasswordResetBody(BaseModel):
+    access_token: str
+    new_password: str
 
 router = APIRouter()
 
@@ -30,3 +38,11 @@ def get_profile(user = Depends(get_current_user)):
         "id": user.id,
         "email": user.email,
     }
+
+@router.post("/forgot-password")
+def forgot_password(body: PasswordResetRequestBody):
+    return request_password_reset(body.email)
+
+@router.post("/reset-password")
+def reset_password_route(body: PasswordResetBody):
+    return reset_password(body.access_token, body.new_password)
