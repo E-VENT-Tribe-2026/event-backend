@@ -17,10 +17,10 @@ router = APIRouter()
 
 # 1. Initialize the Admin Client (Requires your SERVICE_ROLE_KEY from the dashboard)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 # WARNING: This client has full database bypass privileges. Keep the key secret.
-supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # 2. Also keep a standard client just for verifying the token securely
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
