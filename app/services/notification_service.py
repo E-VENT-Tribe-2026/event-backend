@@ -23,12 +23,19 @@ def create_notification(user_id: str, event_id: str, type_: str, message: str):
         .execute()
 
     if existing.data:
-        last_time = datetime.fromisoformat(existing.data[0]["created_at"])
-        now = datetime.now(timezone.utc)
+        created_at = existing.data[0].get("created_at")
+        if isinstance(created_at, str):
+            last_time = datetime.fromisoformat(created_at)
+        elif isinstance(created_at, datetime):
+            last_time = created_at
+        else:
+            last_time = None
 
-        if (now - last_time).total_seconds() < 10:
-            return
-
+        if last_time:
+            now = datetime.now(timezone.utc)
+            if (now - last_time).total_seconds() < 10:
+                return
+            
     supabase.table("notifications").insert(payload).execute()
 
 
