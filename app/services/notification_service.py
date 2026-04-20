@@ -12,16 +12,22 @@ def create_notification(user_id: str, event_id: str, type_: str, message: str):
         "created_at": datetime.now(timezone.utc).isoformat()
     }
 
-    # Prevent duplicates
     existing = supabase.table("notifications") \
-        .select("id") \
+        .select("created_at") \
         .eq("user_id", user_id) \
         .eq("event_id", event_id) \
         .eq("type", type_) \
+        .eq("message", message) \
+        .order("created_at", desc=True) \
+        .limit(1) \
         .execute()
 
     if existing.data:
-        return
+        last_time = datetime.fromisoformat(existing.data[0]["created_at"])
+        now = datetime.now(timezone.utc)
+
+        if (now - last_time).total_seconds() < 10:
+            return
 
     supabase.table("notifications").insert(payload).execute()
 

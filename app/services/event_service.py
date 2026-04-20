@@ -76,6 +76,13 @@ def create_event(user_id: str, data: dict):
     except Exception as e:
         print("Participant insert failed:", str(e))
 
+    create_notification(
+    user_id,
+    event_id,
+    "event_created",
+    f"Your event '{event['title']}' has been created"
+    )
+
     return event
 
 def get_event(event_id: str):
@@ -161,17 +168,19 @@ def update_event(user_id: str, event_id: str, update_data: dict):
         user_id,
         event_id,
         "event_updated",
-        f"Your event '{event['title']}' has been updated"
+        f"Event '{event['title']}' was updated by {user_id}"
     )
 
     for p in participants.data:
-        print("Creating notification for:", p["user_id"])
+        if p["user_id"] == user_id:
+            continue
+
 
         create_notification(
             p["user_id"],
             event_id,
             "event_updated",
-            f"Event '{event['title']}' has been updated"
+            f"Event '{event['title']}' was updated by {user_id}"
         )
 
     return response.data[0]
@@ -185,8 +194,20 @@ def delete_event(user_id: str, event_id: str):
             detail="Not authorized to delete this event"
         )
 
-    supabase.table("events").delete().eq("id", event_id).execute()
-
+    participants = supabase.table("event_participants") \
+        .select("user_id") \
+        .eq("event_id", event_id) \
+        .execute()
+    
+    delete_response = supabase.table("events").delete().eq("id", event_id).execute()
+    if delete_response.data:
+        for p in participants.data:
+            create_notification(
+                p["user_id"],
+                event_id,
+                "event_deleted",
+                f"Event '{event['title']}' was deleted by {user_id}"
+            )
     return {"message": "Event deleted successfully"}
 
 
@@ -319,7 +340,7 @@ def cancel_event(user_id: str, event_id: str):
             p["user_id"],
             event_id,
             "event_cancelled",
-            f"Event '{event['title']}' has been cancelled"
+            f"Event '{event['title']}' was cancelled by {user_id}"
         )
 
     return {"message": "Event cancelled"}
