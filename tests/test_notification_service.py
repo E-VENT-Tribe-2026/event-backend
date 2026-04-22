@@ -25,9 +25,15 @@ class TestCreateNotification:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.order.return_value = chain  # <-- ADD THIS
+        chain.limit.return_value = chain  # <-- ADD THIS
         chain.insert.return_value = chain
-        # Existing record present
-        chain.execute.return_value = MagicMock(data=[{"id": 99}])
+
+        from datetime import datetime, timezone
+
+        # Existing record present with a timestamp from exactly right now
+        mock_time = datetime.now(timezone.utc).isoformat()
+        chain.execute.return_value = MagicMock(data=[{"id": 99, "created_at": mock_time}])
 
         from app.services.notification_service import create_notification
         create_notification("u1", "e1", "event_updated", "hello")
