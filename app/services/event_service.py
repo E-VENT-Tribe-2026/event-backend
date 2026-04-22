@@ -77,10 +77,10 @@ def create_event(user_id: str, data: dict):
         print("Participant insert failed:", str(e))
 
     create_notification(
-    user_id,
-    event_id,
-    "event_created",
-    f"Your event '{event['title']}' has been created"
+        user_id,
+        event_id,
+        "event_created",
+        f"Your event '{event.get('title', 'New Event')}' has been created"
     )
 
     return event

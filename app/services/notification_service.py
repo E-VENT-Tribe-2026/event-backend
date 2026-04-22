@@ -24,6 +24,11 @@ def create_notification(user_id: str, event_id: str, type_: str, message: str):
 
     if existing.data:
         created_at = existing.data[0].get("created_at")
+
+        # Guardrail: If a duplicate exists but has no timestamp, skip insertion
+        if not created_at:
+            return
+        
         if isinstance(created_at, str):
             last_time = datetime.fromisoformat(created_at)
         elif isinstance(created_at, datetime):
