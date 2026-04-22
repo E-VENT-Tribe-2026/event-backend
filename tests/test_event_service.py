@@ -83,10 +83,12 @@ class TestCreateEvent:
         chain.eq.return_value = chain
         chain.execute.return_value = MagicMock(data=[event_row])
         return chain
-
-    @patch("app.services.event_service.generate_embedding", return_value=[0.1, 0.2])
+    
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=[...]) # (Leave return values as they are)
     @patch("app.services.event_service.supabase")
-    def test_create_event_success(self, mock_sb, mock_embed):
+
+    def test_create_event_success(self, mock_sb, mock_embed, mock_notify): # <-- ADD mock_notify HERE
         event_row = {"id": "e1", "title": "Festival", "status": "active"}
         self._stub_chain(mock_sb, event_row)
 
@@ -94,10 +96,10 @@ class TestCreateEvent:
         result = create_event("u1", {"title": "Festival", "description": "Fun", "category": "music"})
 
         assert result["id"] == "e1"
-
+    @patch("app.services.event_service.create_notification") # ADD THIS
     @patch("app.services.event_service.generate_embedding", return_value=None)
     @patch("app.services.event_service.supabase")
-    def test_create_event_sets_status_active(self, mock_sb, mock_embed):
+    def test_create_event_sets_status_active(self, mock_sb, mock_embed, mock_notify):
         event_row = {"id": "e1", "status": "active"}
         self._stub_chain(mock_sb, event_row)
 
@@ -106,10 +108,10 @@ class TestCreateEvent:
 
         insert_payload = mock_sb.table.return_value.insert.call_args_list[0][0][0]
         assert insert_payload["status"] == "active"
-
+    @patch("app.services.event_service.create_notification") # ADD THIS
     @patch("app.services.event_service.generate_embedding", return_value=None)
     @patch("app.services.event_service.supabase")
-    def test_create_event_coerces_cost_to_int(self, mock_sb, mock_embed):
+    def test_create_event_coerces_cost_to_int(self, mock_sb, mock_embed, mock_notify):
         event_row = {"id": "e1"}
         self._stub_chain(mock_sb, event_row)
 
@@ -119,10 +121,10 @@ class TestCreateEvent:
         payload = mock_sb.table.return_value.insert.call_args_list[0][0][0]
         assert payload["cost"] == 9
         assert isinstance(payload["cost"], int)
-
+    @patch("app.services.event_service.create_notification") # ADD THIS
     @patch("app.services.event_service.generate_embedding", return_value=None)
     @patch("app.services.event_service.supabase")
-    def test_create_event_strips_id_field(self, mock_sb, mock_embed):
+    def test_create_event_strips_id_field(self, mock_sb, mock_embed, mock_notify):
         event_row = {"id": "e1"}
         self._stub_chain(mock_sb, event_row)
 
@@ -131,10 +133,10 @@ class TestCreateEvent:
 
         payload = mock_sb.table.return_value.insert.call_args_list[0][0][0]
         assert payload.get("id") is None or "injected-id" not in str(payload.get("id", ""))
-
+    @patch("app.services.event_service.create_notification") # ADD THIS
     @patch("app.services.event_service.generate_embedding", return_value=None)
     @patch("app.services.event_service.supabase")
-    def test_create_event_raises_400_on_empty_response(self, mock_sb, mock_embed):
+    def test_create_event_raises_400_on_empty_response(self, mock_sb, mock_embed, mock_notify):
         chain = MagicMock()
         mock_sb.table.return_value = chain
         chain.insert.return_value = chain
@@ -144,10 +146,10 @@ class TestCreateEvent:
         with pytest.raises(HTTPException) as exc:
             create_event("u1", {"title": "X"})
         assert exc.value.status_code == 400
-
+    @patch("app.services.event_service.create_notification") # ADD THIS
     @patch("app.services.event_service.generate_embedding", return_value=[0.1])
     @patch("app.services.event_service.supabase")
-    def test_create_event_attaches_embedding(self, mock_sb, mock_embed):
+    def test_create_event_attaches_embedding(self, mock_sb, mock_embed, mock_notify):
         event_row = {"id": "e1"}
         self._stub_chain(mock_sb, event_row)
 
@@ -275,6 +277,7 @@ class TestDeleteEvent:
         chain.single.return_value = chain
         chain.execute.side_effect = [
             MagicMock(data=existing),
+            MagicMock(data=[{"user_id": "u2"}]), # Add this mock response for the participants fetch
             MagicMock(data=[]),
         ]
 
