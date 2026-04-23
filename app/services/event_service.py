@@ -3,6 +3,47 @@ from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _email_participants(event: dict, email_type: str):
+    """
+    Fire-and-forget: fetch all participant emails and send update/cancellation emails.
+    Failures are logged and never bubble up to the caller.
+    """
+    from app.services.email_service import (
+        send_email, build_update_email, build_cancellation_email
+    )
+
+    event_id = event.get("id")
+    try:
+        rows = (
+            supabase.table("event_participants")
+            .select("user_id")
+            .eq("event_id", event_id)
+            .execute()
+        ).data or []
+    except Exception as e:
+        logger.error(f"Could not fetch participants for email ({event_id}): {e}")
+        return
+
+    if email_type == "update":
+        subject, plain, html = build_update_email(event)
+    else:
+        subject, plain, html = build_cancellation_email(event)
+
+    for row in rows:
+        user_id = row["user_id"]
+        try:
+            from app.db.supabase_client import supabase as sb
+            resp = sb.auth.admin.get_user_by_id(user_id)
+            email = resp.user.email if resp and resp.user else None
+            if email:
+                send_email(email, subject, plain, html)
+        except Exception as e:
+            logger.error(f"Email ({email_type}) failed for user {user_id}: {e}")
 
 def validate_coordinates(lat, lng):
     if lat is None or lng is None:
@@ -86,14 +127,10 @@ def create_event(user_id: str, data: dict):
     return event
 
 def get_event(event_id: str):
-    # Get today's date in ISO format (YYYY-MM-DD)
-    today = datetime.now().date().isoformat()
-
     response = (
         supabase.table("events")
         .select("*")
         .eq("id", event_id)
-        .gte("event_date", today) 
         .single()
         .execute()
     )
@@ -101,7 +138,7 @@ def get_event(event_id: str):
     if not response.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found or has already expired"
+            detail="Event not found"
         )
 
     return response.data
@@ -187,6 +224,10 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             f"Event '{event['title']}' was updated by {user_id}"
         )
 
+    # Send update emails to all participants
+    updated_event = response.data[0]
+    _email_participants(updated_event, "update")
+
     return response.data[0]
 
 def delete_event(user_id: str, event_id: str):
@@ -205,6 +246,8 @@ def delete_event(user_id: str, event_id: str):
     
     delete_response = supabase.table("events").delete().eq("id", event_id).execute()
     if delete_response.data:
+        # Send cancellation emails before notifying
+        _email_participants(event, "cancellation")
         for p in participants.data:
             create_notification(
                 p["user_id"],
@@ -330,6 +373,9 @@ def cancel_event(user_id: str, event_id: str):
         .select("user_id") \
         .eq("event_id", event_id) \
         .execute()
+
+    # Send cancellation emails before removing participants
+    _email_participants(event, "cancellation")
 
     supabase.table("event_participants") \
         .delete() \
