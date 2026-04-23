@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
     from app.services.reminder_service import send_event_reminders
 
     scheduler = BackgroundScheduler()
-    # Poll every minute for testing (window is 2–3 min before start)
-    scheduler.add_job(send_event_reminders, "interval", minutes=1, id="event_reminders")
+    # Poll every hour; reminder window is 12–13 h before start so each event is caught once
+    scheduler.add_job(send_event_reminders, "interval", hours=1, id="event_reminders")
     scheduler.start()
     logger.info("Reminder scheduler started.")
 

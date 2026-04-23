@@ -33,33 +33,42 @@ def send_email(to_email: str, subject: str, body: str, html_body: str = None):
 
 
 def build_reminder_email(event: dict) -> tuple[str, str, str]:
-    """Return (subject, plain_text, html) for a 12-hour event reminder."""
-    title = event.get("title", "Upcoming Event")
+    """Return (subject, plain_text, html) for a 2-hour event reminder."""
+    title       = event.get("title") or "Upcoming Event"
     description = event.get("description") or "No description provided."
-    location = event.get("location_name") or "Location TBD"
-    start_dt = event.get("start_datetime", "")
-    category = event.get("category") or "General"
-    cost = event.get("cost", 0)
-    cost_str = "Free" if not cost or cost == 0 else f"${cost}"
+    location    = event.get("location_name") or "Location TBD"
+    start_dt    = event.get("start_datetime", "")
+    end_dt      = event.get("end_datetime", "")
+    category    = event.get("category") or "General"
+    cost        = event.get("cost", 0)
+    capacity    = event.get("max_capacity")
+    cost_str    = "Free" if not cost or cost == 0 else f"${cost}"
+    capacity_str = str(capacity) if capacity else "Unlimited"
 
-    try:
-        from datetime import datetime
-        dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
-        start_formatted = dt.strftime("%A, %B %d, %Y at %I:%M %p UTC")
-    except Exception:
-        start_formatted = start_dt
+    def fmt(dt_str):
+        try:
+            from datetime import datetime as dt_cls
+            dt = dt_cls.fromisoformat(dt_str.replace("Z", "+00:00"))
+            return dt.strftime("%A, %B %d, %Y at %I:%M %p UTC")
+        except Exception:
+            return dt_str
 
-    subject = f"Reminder: \"{title}\" starts in 2 minutes"
+    start_formatted = fmt(start_dt)
+    end_formatted   = fmt(end_dt)
+
+    subject = f"Reminder: \"{title}\" starts in 2 hours"
 
     plain = (
         f"Hi there,\n\n"
-        f"This is a reminder that an event you're interested in is starting soon!\n\n"
-        f"Event: {title}\n"
-        f"When: {start_formatted}\n"
-        f"Where: {location}\n"
-        f"Category: {category}\n"
-        f"Cost: {cost_str}\n\n"
-        f"Description:\n{description}\n\n"
+        f"Your event is starting in 2 hours — here are the details:\n\n"
+        f"  Event    : {title}\n"
+        f"  Starts   : {start_formatted}\n"
+        f"  Ends     : {end_formatted}\n"
+        f"  Location : {location}\n"
+        f"  Category : {category}\n"
+        f"  Cost     : {cost_str}\n"
+        f"  Capacity : {capacity_str}\n\n"
+        f"About this event:\n{description}\n\n"
         f"See you there!\n"
         f"— The E-VENT Team"
     )
@@ -67,17 +76,40 @@ def build_reminder_email(event: dict) -> tuple[str, str, str]:
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; padding: 20px;">
-        <h2 style="color: #4F46E5;">&#9200; Event Reminder</h2>
+        <h2 style="color: #4F46E5;">&#9200; Your event starts in 2 hours!</h2>
         <p>Hi there,</p>
-        <p>This is a friendly reminder that an event you're interested in is starting in <strong>2 minutes</strong>!</p>
-        <div style="background: #F3F4F6; border-radius: 8px; padding: 16px; margin: 20px 0;">
-          <h3 style="margin: 0 0 12px; color: #1F2937;">{title}</h3>
-          <p style="margin: 4px 0;">&#128197; <strong>When:</strong> {start_formatted}</p>
-          <p style="margin: 4px 0;">&#128205; <strong>Where:</strong> {location}</p>
-          <p style="margin: 4px 0;">&#127991; <strong>Category:</strong> {category}</p>
-          <p style="margin: 4px 0;">&#128176; <strong>Cost:</strong> {cost_str}</p>
+        <p>Here's everything you need to know before you head out:</p>
+        <div style="background: #F3F4F6; border-radius: 8px; padding: 20px; margin: 20px 0;">
+          <h3 style="margin: 0 0 16px; color: #1F2937; font-size: 20px;">{title}</h3>
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 6px 0; color: #6B7280; width: 110px;">&#128197; Starts</td>
+              <td style="padding: 6px 0; font-weight: 600;">{start_formatted}</td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0; color: #6B7280;">&#128198; Ends</td>
+              <td style="padding: 6px 0; font-weight: 600;">{end_formatted}</td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0; color: #6B7280;">&#128205; Location</td>
+              <td style="padding: 6px 0; font-weight: 600;">{location}</td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0; color: #6B7280;">&#127991; Category</td>
+              <td style="padding: 6px 0; font-weight: 600;">{category}</td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0; color: #6B7280;">&#128176; Cost</td>
+              <td style="padding: 6px 0; font-weight: 600;">{cost_str}</td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0; color: #6B7280;">&#128101; Capacity</td>
+              <td style="padding: 6px 0; font-weight: 600;">{capacity_str}</td>
+            </tr>
+          </table>
         </div>
-        <p><strong>About this event:</strong><br>{description}</p>
+        <p style="margin-top: 4px;"><strong>About this event:</strong></p>
+        <p style="color: #4B5563;">{description}</p>
         <p style="margin-top: 24px;">See you there!<br><strong>&#8212; The E-VENT Team</strong></p>
         <hr style="border: none; border-top: 1px solid #E5E7EB; margin-top: 32px;" />
         <p style="font-size: 12px; color: #9CA3AF;">

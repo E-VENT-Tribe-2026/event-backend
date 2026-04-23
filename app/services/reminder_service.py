@@ -6,7 +6,7 @@ from app.services.notification_service import create_notification
 
 logger = logging.getLogger(__name__)
 
-REMINDER_MINUTES = 2
+REMINDER_HOURS = 2
 
 
 def _get_user_email(user_id: str) -> str | None:
@@ -20,10 +20,10 @@ def _get_user_email(user_id: str) -> str | None:
 
 
 def _get_upcoming_events() -> list[dict]:
-    """Return active events whose start_datetime falls in the next 2–3 minutes."""
+    """Return active events whose start_datetime falls in the next 2–3 hours."""
     now = datetime.now(timezone.utc)
-    window_start = now + timedelta(minutes=REMINDER_MINUTES)
-    window_end = window_start + timedelta(minutes=1)
+    window_start = now + timedelta(hours=REMINDER_HOURS)
+    window_end = window_start + timedelta(hours=1)
 
     response = (
         supabase.table("events")
@@ -118,8 +118,7 @@ def send_event_reminders():
                     user_id=user_id,
                     event_id=event_id,
                     type_="reminder",
-                    message=f"Reminder: \"{title}\" starts in {REMINDER_MINUTES} minutes.",
-                )
+                    message=f"Reminder: \"{title}\" starts in {REMINDER_HOURS} hours.",                )
                 sent += 1
             except Exception as e:
                 logger.error(f"Reminder failed for user {user_id}, event {event_id}: {e}")
