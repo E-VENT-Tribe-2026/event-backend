@@ -6,7 +6,8 @@ from app.services.participant_service import (
     join_event,
     leave_event,
     get_event_participants,
-    get_my_events
+    get_my_events,
+    remove_participant,
 )
 
 router = APIRouter()
@@ -54,19 +55,8 @@ def my_status_api(event_id: str, user=Depends(get_current_user)):
     return {"joined": False, "status": None}
 
 @router.delete("/{event_id}/participants/{participant_id}")
-def remove_participant(event_id: str, participant_id: str, user=Depends(get_current_user)):
-    event = get_event(event_id)
-
-    if event["created_by"] != user.id:
-        raise HTTPException(status_code=403, detail="Only the event owner can remove participants")
-
-    supabase.table("event_participants") \
-        .delete() \
-        .eq("event_id", event_id) \
-        .eq("user_id", participant_id) \
-        .execute()
-
-    return {"message": "Participant removed"}
+def remove_participant_api(event_id: str, participant_id: str, user=Depends(get_current_user)):
+    return remove_participant(user.id, event_id, participant_id)
 
 @router.get("/my/events")
 def my_events(user=Depends(get_current_user)):
