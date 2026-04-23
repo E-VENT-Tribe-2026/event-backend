@@ -31,8 +31,27 @@ def leave_event_api(
 
 @router.get("/{event_id}/participants")
 def participants_api(event_id: str):
-
     return get_event_participants(event_id)
+
+
+@router.get("/{event_id}/participants/count")
+def participants_count_api(event_id: str):
+    participants = get_event_participants(event_id)
+    return {"event_id": event_id, "count": len(participants)}
+
+
+@router.get("/{event_id}/my-status")
+def my_status_api(event_id: str, user=Depends(get_current_user)):
+    response = (
+        supabase.table("event_participants")
+        .select("status")
+        .eq("event_id", event_id)
+        .eq("user_id", user.id)
+        .execute()
+    )
+    if response.data:
+        return {"joined": True, "status": response.data[0]["status"]}
+    return {"joined": False, "status": None}
 
 @router.delete("/{event_id}/participants/{participant_id}")
 def remove_participant(event_id: str, participant_id: str, user=Depends(get_current_user)):

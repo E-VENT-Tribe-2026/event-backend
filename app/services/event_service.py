@@ -18,6 +18,8 @@ def _email_participants(event: dict, email_type: str):
     )
     from app.core.config import settings
 
+    logger.info(f"_email_participants called: type={email_type}, event={event.get('id')}, smtp_user={settings.SMTP_USER}, smtp_configured={bool(settings.SMTP_USER and settings.SMTP_PASSWORD)}")
+
     if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
         logger.warning("SMTP not configured — skipping participant emails.")
         return
@@ -33,6 +35,8 @@ def _email_participants(event: dict, email_type: str):
     except Exception as e:
         logger.error(f"Could not fetch participants for email ({event_id}): {e}")
         return
+
+    logger.info(f"Sending {email_type} emails to {len(rows)} participants for event {event_id}")
 
     if email_type == "update":
         subject, plain, html = build_update_email(event)
