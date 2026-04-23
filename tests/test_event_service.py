@@ -49,11 +49,14 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain  # <--- ADD THIS
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=event)
 
         from app.services.event_service import get_event
         assert get_event("e1") == event
+        # Optional: verify gte was called with a date string
+        chain.gte.assert_called_once()
 
     @patch("app.services.event_service.supabase")
     def test_raises_404_when_missing(self, mock_sb):
@@ -61,6 +64,7 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain  # <--- ADD THIS
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=None)
 
@@ -181,6 +185,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain
         chain.single.return_value = chain
         # Calls in order: get_event, update, participants, notifications
         chain.execute.side_effect = [
@@ -221,6 +226,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain
         chain.single.return_value = chain
         chain.execute.side_effect = [
             MagicMock(data=existing),
@@ -246,6 +252,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain
         chain.single.return_value = chain
         chain.execute.side_effect = [
             MagicMock(data=existing),
@@ -274,6 +281,7 @@ class TestDeleteEvent:
         chain.select.return_value = chain
         chain.delete.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain
         chain.single.return_value = chain
         chain.execute.side_effect = [
             MagicMock(data=existing),
@@ -324,6 +332,7 @@ class TestCancelEvent:
         chain.update.return_value = chain
         chain.delete.return_value = chain
         chain.eq.return_value = chain
+        chain.gte.return_value = chain
         chain.single.return_value = chain
         
         # 3. Side effects for the 4 DB calls in cancel_event
@@ -439,23 +448,40 @@ class TestListEvents:
     @patch("app.services.event_service.generate_embedding", return_value=[0.1, 0.2])
     @patch("app.services.event_service.supabase")
     def test_search_uses_semantic_rpc(self, mock_sb, mock_embed):
-        now = "2026-01-01T00:00:00+00:00"
-        rows = [{"id": "e1", "end_datetime": "2099-01-01T00:00:00", "status": "active"}]
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        mock_sb.rpc.return_value = MagicMock()
-        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=rows)
+        # 1. Setup mock dates: 'now' for the query, and 'future' for the data
+        from datetime import datetime, timedelta
+        future_date = (datetime.now() + timedelta(days=5)).isoformat()
+        
+        # 2. Mock data that satisfies: status='active' AND end_datetime > now
+        rows = [
+            {
+                "id": "e1", 
+                "title": "Future Fest", 
+                "end_datetime": future_date, 
+                "status": "active"
+            }
+        ]
+        
+        # 3. Setup the RPC chain
+        rpc_mock = MagicMock()
+        mock_sb.rpc.return_value = rpc_mock
+        rpc_mock.execute.return_value = MagicMock(data=rows)
 
         from app.services.event_service import list_events
         result = list_events(search="outdoor festival")
 
+        # 4. Assertions
         mock_sb.rpc.assert_called_once_with("search_events", {
             "query_embedding": [0.1, 0.2],
             "query_text": "outdoor festival",
             "match_count": 10,
         })
-        # Only active, future events should be returned
-        assert all(e["status"] == "active" for e in result["data"])
+        
+        # Verify the result contains our future event
+        assert len(result["data"]) == 1
+        assert result["data"][0]["id"] == "e1"
+        # Verify the logic correctly identified it as active/upcoming
+        assert result["data"][0]["status"] == "active"
 
     @patch("app.services.event_service.supabase")
     def test_pagination_range_correct(self, mock_sb):
@@ -466,3 +492,17 @@ class TestListEvents:
 
         chain = mock_sb.table.return_value
         chain.range.assert_called_once_with(10, 14)
+
+    @patch("app.services.event_service.supabase")
+
+    def test_filters_out_expired_events(self, mock_sb):
+        self._stub_standard_chain(mock_sb, [])
+
+        from app.services.event_service import list_events
+        list_events()
+
+        chain = mock_sb.table.return_value
+        # Verify gte was called on the date column (replace "event_date" with your actual column name)
+        # This ensures the "upcoming only" logic is active
+        from unittest.mock import ANY # Add this import at the top
+        chain.gte.assert_any_call("end_datetime", ANY)
