@@ -16,6 +16,11 @@ def _email_participants(event: dict, email_type: str):
     from app.services.email_service import (
         send_email, build_update_email, build_cancellation_email
     )
+    from app.core.config import settings
+
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("SMTP not configured — skipping participant emails.")
+        return
 
     event_id = event.get("id")
     try:
@@ -37,11 +42,13 @@ def _email_participants(event: dict, email_type: str):
     for row in rows:
         user_id = row["user_id"]
         try:
-            from app.db.supabase_client import supabase as sb
-            resp = sb.auth.admin.get_user_by_id(user_id)
+            resp = supabase.auth.admin.get_user_by_id(user_id)
             email = resp.user.email if resp and resp.user else None
             if email:
                 send_email(email, subject, plain, html)
+                logger.info(f"Sent {email_type} email to {email} for event {event_id}")
+            else:
+                logger.warning(f"No email found for user {user_id}")
         except Exception as e:
             logger.error(f"Email ({email_type}) failed for user {user_id}: {e}")
 
@@ -224,8 +231,8 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             f"Event '{event['title']}' was updated by {user_id}"
         )
 
-    # Send update emails to all participants
-    updated_event = response.data[0]
+    # Send update emails to all participants using the full merged event data
+    updated_event = {**event, **response.data[0]}
     _email_participants(updated_event, "update")
 
     return response.data[0]
