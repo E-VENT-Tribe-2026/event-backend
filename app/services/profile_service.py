@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.utils.embedding_helper import generate_embedding
 
 
 def get_profile(user_id: str):
@@ -22,9 +23,36 @@ def get_profile(user_id: str):
     return response.data
 
 
+def _compute_interest_embedding(interests: list[str] | None, bio: str | None) -> list[float] | None:
+    interests = interests or []
+    bio = bio or ""
+    text = (" ".join(interests) + " " + bio).strip()
+    return generate_embedding(text) if text else None
+
+
 def update_profile(user_id: str, update_data: dict):
     """Update profile fields for the authenticated user."""
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # If the user updates interests and/or bio, regenerate the interest embedding.
+    # We fetch the existing profile so partial updates still produce a correct embedding.
+    if "interests" in update_data or "bio" in update_data:
+        existing = (
+            supabase.table("profiles")
+            .select("interests, bio")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        if existing.data is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profile not found",
+            )
+
+        interests = update_data.get("interests", existing.data.get("interests"))
+        bio = update_data.get("bio", existing.data.get("bio"))
+        update_data["interest_embedding"] = _compute_interest_embedding(interests, bio)
 
     response = (
         supabase.table("profiles")
