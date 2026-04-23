@@ -86,18 +86,22 @@ def create_event(user_id: str, data: dict):
     return event
 
 def get_event(event_id: str):
+    # Get today's date in ISO format (YYYY-MM-DD)
+    today = datetime.now().date().isoformat()
+
     response = (
         supabase.table("events")
         .select("*")
         .eq("id", event_id)
+        .gte("event_date", today) 
         .single()
         .execute()
     )
 
-    if response.data is None:
+    if not response.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found"
+            detail="Event not found or has already expired"
         )
 
     return response.data

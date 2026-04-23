@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 
 class ProfileResponse(BaseModel):
@@ -8,6 +8,7 @@ class ProfileResponse(BaseModel):
     phone: Optional[str]
     avatar_url: Optional[str]
     bio: Optional[str]
+    interests: Optional[List[str]] = None
     visibility: Optional[str]
     latitude: Optional[float]
     longitude: Optional[float]
@@ -18,6 +19,7 @@ class ProfileUpdateRequest(BaseModel):
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
+    interests: Optional[List[str]] = None
     visibility: Optional[str] = None
 
 
