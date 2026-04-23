@@ -49,14 +49,11 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
-        chain.gte.return_value = chain  # <--- ADD THIS
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=event)
 
         from app.services.event_service import get_event
         assert get_event("e1") == event
-        # Optional: verify gte was called with a date string
-        chain.gte.assert_called_once()
 
     @patch("app.services.event_service.supabase")
     def test_raises_404_when_missing(self, mock_sb):
@@ -64,7 +61,6 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
-        chain.gte.return_value = chain  # <--- ADD THIS
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=None)
 
@@ -315,27 +311,23 @@ class TestDeleteEvent:
 # ──────────────────────────────────────────────
 
 class TestCancelEvent:
-    # 1. Patch the SOURCE module so the local import inside cancel_event gets the mock
+    @patch("app.services.event_service._email_participants")
     @patch("app.services.notification_service.create_notification")
-    @patch("app.services.event_service.supabase") 
-    def test_cancel_success(self, mock_sb, mock_notify):
-        # NOTE: If VS Code shows red squiggles, swap names to (self, mock_notify, mock_sb)
-        
-        # 2. Block the real logic before it hits Postgres
-        mock_notify.return_value = None 
-        
+    @patch("app.services.event_service.supabase")
+    def test_cancel_success(self, mock_sb, mock_notify, mock_email):
+        mock_notify.return_value = None
+        mock_email.return_value = None
+
         existing = {"id": "e1", "title": "Test Event", "created_by": "u1", "status": "active"}
-        
+
         chain = MagicMock()
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.delete.return_value = chain
         chain.eq.return_value = chain
-        chain.gte.return_value = chain
         chain.single.return_value = chain
-        
-        # 3. Side effects for the 4 DB calls in cancel_event
+
         chain.execute.side_effect = [
             MagicMock(data=existing),            # 1. get_event
             MagicMock(data=[]),                  # 2. update status
@@ -345,9 +337,10 @@ class TestCancelEvent:
 
         from app.services.event_service import cancel_event
         result = cancel_event("u1", "e1")
-        
+
         assert result["message"] == "Event cancelled"
         mock_notify.assert_called()
+        mock_email.assert_called_once_with(existing, "cancellation")
 
 
 
