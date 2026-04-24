@@ -139,8 +139,8 @@ def create_event(user_id: str, data: dict):
     except Exception as e:
         print("Participant insert failed:", str(e))
 
-    # Post a system notification message in the event chat
-    post_system_notification(event_id, "🎉 New Event Created")
+    # Post welcome system message in the event chat
+    post_system_notification(event_id, f"👋 Welcome to {event.get('title', 'the event')}! Say hello to everyone.")
 
     create_notification(
         user_id,

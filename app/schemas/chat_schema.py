@@ -45,7 +45,9 @@ class ChatMessageResponse(BaseModel):
     """Shape of a chat message returned from the API."""
     id: int = Field(..., description="Auto-incremented message ID.")
     event_id: str = Field(..., description="UUID of the event this message belongs to.")
-    sender_id: str = Field(..., description="UUID of the user who sent the message.")
+    sender_id: Optional[str] = Field(None, description="UUID of the user who sent the message.")
+    sender_name: Optional[str] = Field(None, description="Full name of the sender.")
+    sender_role: Optional[str] = Field(None, description="Role of the sender: organizer, participant, or system.")
     content: str = Field(..., description="Text content of the message.")
     created_at: datetime = Field(..., description="Timestamp when the message was sent (UTC).")
 
@@ -55,6 +57,8 @@ class ChatMessageResponse(BaseModel):
                 "id": 42,
                 "event_id": "550e8400-e29b-41d4-a716-446655440000",
                 "sender_id": "a3bb189e-8bf9-3888-9912-ace4e6543002",
+                "sender_name": "Jane Doe",
+                "sender_role": "organizer",
                 "content": "Hey everyone, can't wait for this event! 🎉",
                 "created_at": "2026-04-22T16:00:00Z"
             }

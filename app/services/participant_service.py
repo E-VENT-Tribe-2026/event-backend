@@ -98,6 +98,9 @@ def leave_event(user_id: str, event_id: str):
     if not response.data:
         raise HTTPException(status_code=400, detail="User not part of event")
 
+    display_name = get_display_name(user_id)
+    post_system_notification(event_id, f"👋 {display_name} has left this chat")
+
     create_notification(
         event["created_by"],
         event_id,
