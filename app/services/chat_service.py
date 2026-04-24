@@ -40,6 +40,30 @@ def _assert_participant(user_id: str, event_id: str) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# System notifications (type = 'notification')
+# ────────────────────────────────────────────────────────────────────────────
+
+def post_system_notification(event_id: str, content: str) -> dict | None:
+    """
+    Insert a system-generated notification message into an event's chat.
+    These rows have type='notification' and no sender_id.
+    Failures are swallowed so they never break the primary operation.
+    """
+    try:
+        payload = {
+            "event_id": event_id,
+            "content": content,
+            "type": "notification",
+            "sender_id": None,
+        }
+        response = supabase.table("event_chats").insert(payload).execute()
+        return response.data[0] if response.data else None
+    except Exception as exc:
+        print(f"[chat_service] Failed to post system notification: {exc}")
+        return None
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # CRUD operations
 # ────────────────────────────────────────────────────────────────────────────
 

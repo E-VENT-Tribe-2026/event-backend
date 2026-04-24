@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
+from app.services.chat_service import post_system_notification
 
 def validate_coordinates(lat, lng):
     if lat is None or lng is None:
@@ -75,6 +76,9 @@ def create_event(user_id: str, data: dict):
 
     except Exception as e:
         print("Participant insert failed:", str(e))
+
+    # Post a system notification message in the event chat
+    post_system_notification(event_id, "🎉 New Event Created")
 
     create_notification(
         user_id,

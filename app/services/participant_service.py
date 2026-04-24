@@ -2,6 +2,23 @@ from fastapi import HTTPException
 from app.db.supabase_client import supabase
 from app.services.notification_service import create_notification
 from app.services.event_service import get_event
+from app.services.chat_service import post_system_notification
+
+
+def _get_display_name(user_id: str) -> str:
+    """Return the user's full_name from profiles, falling back to a short ID."""
+    try:
+        result = (
+            supabase.table("profiles")
+            .select("full_name")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        name = result.data.get("full_name") if result.data else None
+        return name if name else user_id[:8]
+    except Exception:
+        return user_id[:8]
 
 
 def join_event(user_id: str, event_id: str):
@@ -29,6 +46,10 @@ def join_event(user_id: str, event_id: str):
         })
         .execute()
     )
+
+    # Post system notification in the event chat
+    display_name = _get_display_name(user_id)
+    post_system_notification(event_id, f"👋 {display_name} has joined this chat")
 
     create_notification(
         event["created_by"],
