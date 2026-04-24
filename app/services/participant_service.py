@@ -8,9 +8,19 @@ logger = logging.getLogger(__name__)
 
 
 def _get_user_email(user_id: str) -> str | None:
+    import httpx
+    from app.core.config import settings
     try:
-        resp = supabase.auth.admin.get_user_by_id(user_id)
-        return resp.user.email if resp and resp.user else None
+        url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+        headers = {
+            "apikey": settings.SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+        }
+        resp = httpx.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("email")
+        logger.warning(f"Auth admin returned {resp.status_code} for user {user_id}: {resp.text}")
+        return None
     except Exception as e:
         logger.warning(f"Could not fetch email for user {user_id}: {e}")
         return None
