@@ -4,6 +4,67 @@ from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _email_participants(event: dict, email_type: str):
+    """
+    Fire-and-forget: fetch all participant emails and send update/cancellation emails.
+    Failures are logged and never bubble up to the caller.
+    """
+    from app.services.email_service import (
+        send_email, build_update_email, build_cancellation_email
+    )
+    from app.core.config import settings
+
+    from app.core.config import settings
+
+    logger.info(f"_email_participants called: type={email_type}, event={event.get('id')}, smtp_user={settings.SMTP_USER}, smtp_configured={bool(settings.SMTP_USER and settings.SMTP_PASSWORD)}")
+
+    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("SMTP not configured — skipping participant emails.")
+        return
+
+    event_id = event.get("id")
+    try:
+        rows = (
+            supabase.table("event_participants")
+            .select("user_id")
+            .eq("event_id", event_id)
+            .execute()
+        ).data or []
+    except Exception as e:
+        logger.error(f"Could not fetch participants for email ({event_id}): {e}")
+        return
+
+    logger.info(f"Sending {email_type} emails to {len(rows)} participants for event {event_id}")
+
+    if email_type == "update":
+        subject, plain, html = build_update_email(event)
+    else:
+        subject, plain, html = build_cancellation_email(event)
+
+    for row in rows:
+        user_id = row["user_id"]
+        try:
+            import httpx
+            url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+            headers = {
+                "apikey": settings.SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+            }
+            resp = httpx.get(url, headers=headers, timeout=10)
+            email = resp.json().get("email") if resp.status_code == 200 else None
+            if email:
+                send_email(email, subject, plain, html)
+                logger.info(f"Sent {email_type} email to {email} for event {event_id}")
+            else:
+                logger.warning(f"No email found for user {user_id}")
+        except Exception as e:
+            logger.error(f"Email ({email_type}) failed for user {user_id}: {e}")
+
 
 def validate_coordinates(lat, lng):
     if lat is None or lng is None:
@@ -98,7 +159,7 @@ def get_event(event_id: str):
         .execute()
     )
 
-    if response.data is None:
+    if not response.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Event not found"
@@ -187,6 +248,10 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             f"Event '{event['title']}' was updated by {user_id}"
         )
 
+    # Send update emails to all participants using the full merged event data
+    updated_event = {**event, **response.data[0]}
+    _email_participants(updated_event, "update")
+
     return response.data[0]
 
 def delete_event(user_id: str, event_id: str):
@@ -205,6 +270,8 @@ def delete_event(user_id: str, event_id: str):
     
     delete_response = supabase.table("events").delete().eq("id", event_id).execute()
     if delete_response.data:
+        # Send cancellation emails before notifying
+        _email_participants(event, "cancellation")
         for p in participants.data:
             create_notification(
                 p["user_id"],
@@ -330,6 +397,9 @@ def cancel_event(user_id: str, event_id: str):
         .select("user_id") \
         .eq("event_id", event_id) \
         .execute()
+
+    # Send cancellation emails before removing participants
+    _email_participants(event, "cancellation")
 
     supabase.table("event_participants") \
         .delete() \

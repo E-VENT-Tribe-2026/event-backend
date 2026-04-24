@@ -30,13 +30,16 @@ def create_notification(user_id: str, event_id: str, type_: str, message: str):
             return
         
         if isinstance(created_at, str):
-            last_time = datetime.fromisoformat(created_at)
+            last_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         elif isinstance(created_at, datetime):
             last_time = created_at
         else:
             last_time = None
 
         if last_time:
+            # Ensure last_time is timezone-aware before comparing
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
             if (now - last_time).total_seconds() < 10:
                 return

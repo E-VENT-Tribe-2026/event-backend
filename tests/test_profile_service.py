@@ -52,6 +52,34 @@ class TestUpdateProfile:
         args = chain.update.call_args[0][0]
         assert "updated_at" in args
 
+    @patch("app.services.profile_service.generate_embedding")
+    @patch("app.services.profile_service.supabase")
+    def test_update_interests_regenerates_embedding(self, mock_sb, mock_generate):
+        mock_generate.return_value = [0.1, 0.2, 0.3]
+
+        # first query: fetch existing interests/bio for partial update embedding compute
+        select_chain = MagicMock()
+        update_chain = MagicMock()
+
+        mock_sb.table.side_effect = [select_chain, update_chain]
+        select_chain.select.return_value = select_chain
+        select_chain.eq.return_value = select_chain
+        select_chain.single.return_value = select_chain
+        select_chain.execute.return_value = MagicMock(data={"interests": ["old"], "bio": "Old bio"})
+
+        # second query: actual update call
+        update_chain.update.return_value = update_chain
+        update_chain.eq.return_value = update_chain
+        update_chain.execute.return_value = MagicMock(data=[{"id": "u1"}])
+
+        from app.services.profile_service import update_profile
+        update_profile("u1", {"interests": ["sports", "photography"]})
+
+        payload = update_chain.update.call_args[0][0]
+        assert payload["interests"] == ["sports", "photography"]
+        assert payload["interest_embedding"] == [0.1, 0.2, 0.3]
+        mock_generate.assert_called_once()
+
     @patch("app.services.profile_service.supabase")
     def test_update_failure_raises_400(self, mock_sb):
         chain = MagicMock()
