@@ -23,6 +23,25 @@ def get_profile(user_id: str):
     return response.data
 
 
+def get_display_name(user_id: str) -> str:
+    """Return the user's full_name from profiles, falling back to 'Someone' if empty."""
+    try:
+        result = (
+            supabase.table("profiles")
+            .select("full_name")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        name = result.data.get("full_name") if result.data else None
+        # if the name is strictly empty or whitespace, treat as missing
+        if name and name.strip():
+            return name.strip()
+        return "Someone"
+    except Exception:
+        return "Someone"
+
+
 def _compute_interest_embedding(interests: list[str] | None, bio: str | None) -> list[float] | None:
     interests = interests or []
     bio = bio or ""
