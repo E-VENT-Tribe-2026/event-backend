@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth_routes, event_routes, profile_routes, saved_event_routes, notification_routes, participant_routes, recommendation_routes, reminder_routes
+from app.api.v1 import auth_routes, event_routes, profile_routes, saved_event_routes, notification_routes, participant_routes, recommendation_routes, chat_routes, reminder_routes
 
 api_router = APIRouter()
 
@@ -49,6 +49,12 @@ api_router.include_router(
     recommendation_routes.router,
     prefix="/recommendations",
     tags=["Recommendations"]
+)
+
+api_router.include_router(
+    chat_routes.router,
+    prefix="/chats",
+    tags=["Chats"]
 )
 
 api_router.include_router(
