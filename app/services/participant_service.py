@@ -61,7 +61,7 @@ def join_event(user_id: str, event_id: str):
         event["created_by"],
         event_id,
         "user_joined",
-        f"Someone joined your event '{title}'"
+        f"{display_name} joined your event '{title}'"
     )
 
     # Notify participant
@@ -69,7 +69,7 @@ def join_event(user_id: str, event_id: str):
         user_id,
         event_id,
         "joined_event",
-        f"You have successfully joined '{title}'"
+        f"You have joined '{title} event'"
     )
 
     # Email participant only
@@ -105,7 +105,7 @@ def leave_event(user_id: str, event_id: str):
         event["created_by"],
         event_id,
         "user_left",
-        f"Someone left your event '{title}'"
+        f"{display_name} left your event '{title}'"
     )
 
     return {"message": "Left event successfully"}
@@ -126,13 +126,14 @@ def remove_participant(organizer_id: str, event_id: str, participant_id: str):
         .execute()
 
     title = event.get("title", "Event")
+    organizer_name = get_display_name(organizer_id)
 
     # Notify the removed participant
     create_notification(
         participant_id,
         event_id,
         "removed_from_event",
-        f"You have been removed from '{title}' by the organizer."
+        f"You have been removed from '{title}' by {organizer_name}."
     )
 
     # Email the removed participant
