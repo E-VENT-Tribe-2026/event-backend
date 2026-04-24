@@ -4,6 +4,7 @@ from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
+from app.services.profile_service import get_display_name
 import logging
 
 logger = logging.getLogger(__name__)
@@ -229,11 +230,13 @@ def update_event(user_id: str, event_id: str, update_data: dict):
 
     print("Participants:", participants.data)
 
+    display_name = get_display_name(user_id)
+
     create_notification(
         user_id,
         event_id,
         "event_updated",
-        f"Event '{event['title']}' was updated by {user_id}"
+        f"Event '{event['title']}' was updated by {display_name}"
     )
 
     for p in participants.data:
@@ -245,7 +248,7 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             p["user_id"],
             event_id,
             "event_updated",
-            f"Event '{event['title']}' was updated by {user_id}"
+            f"Event '{event['title']}' was updated by {display_name}"
         )
 
     # Send update emails to all participants using the full merged event data
@@ -272,12 +275,13 @@ def delete_event(user_id: str, event_id: str):
     if delete_response.data:
         # Send cancellation emails before notifying
         _email_participants(event, "cancellation")
+        display_name = get_display_name(user_id)
         for p in participants.data:
             create_notification(
                 p["user_id"],
                 event_id,
                 "event_deleted",
-                f"Event '{event['title']}' was deleted by {user_id}"
+                f"Event '{event['title']}' was deleted by {display_name}"
             )
     return {"message": "Event deleted successfully"}
 
@@ -408,13 +412,15 @@ def cancel_event(user_id: str, event_id: str):
 
     # notify
     from app.services.notification_service import create_notification
+    
+    display_name = get_display_name(user_id)
 
     for p in participants.data:
         create_notification(
             p["user_id"],
             event_id,
             "event_cancelled",
-            f"Event '{event['title']}' was cancelled by {user_id}"
+            f"Event '{event['title']}' was cancelled by {display_name}"
         )
 
     return {"message": "Event cancelled"}
