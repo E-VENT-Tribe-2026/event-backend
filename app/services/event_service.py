@@ -18,6 +18,8 @@ def _email_participants(event: dict, email_type: str):
     )
     from app.core.config import settings
 
+    from app.core.config import settings
+
     logger.info(f"_email_participants called: type={email_type}, event={event.get('id')}, smtp_user={settings.SMTP_USER}, smtp_configured={bool(settings.SMTP_USER and settings.SMTP_PASSWORD)}")
 
     if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
@@ -46,8 +48,14 @@ def _email_participants(event: dict, email_type: str):
     for row in rows:
         user_id = row["user_id"]
         try:
-            resp = supabase.auth.admin.get_user_by_id(user_id)
-            email = resp.user.email if resp and resp.user else None
+            import httpx
+            url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+            headers = {
+                "apikey": settings.SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+            }
+            resp = httpx.get(url, headers=headers, timeout=10)
+            email = resp.json().get("email") if resp.status_code == 200 else None
             if email:
                 send_email(email, subject, plain, html)
                 logger.info(f"Sent {email_type} email to {email} for event {event_id}")
