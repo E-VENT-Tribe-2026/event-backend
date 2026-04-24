@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     EMAIL_FROM: str = "no-reply@eventapp.com"
 
+    # Cron job secret (used to protect the /reminders/trigger endpoint)
+    CRON_SECRET: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = True

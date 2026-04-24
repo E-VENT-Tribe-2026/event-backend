@@ -6,7 +6,8 @@ from app.services.participant_service import (
     join_event,
     leave_event,
     get_event_participants,
-    get_my_events
+    get_my_events,
+    remove_participant,
 )
 
 router = APIRouter()
@@ -31,23 +32,31 @@ def leave_event_api(
 
 @router.get("/{event_id}/participants")
 def participants_api(event_id: str):
-
     return get_event_participants(event_id)
 
-@router.delete("/{event_id}/participants/{participant_id}")
-def remove_participant(event_id: str, participant_id: str, user=Depends(get_current_user)):
-    event = get_event(event_id)
 
-    if event["created_by"] != user.id:
-        raise HTTPException(status_code=403, detail="Only the event owner can remove participants")
+@router.get("/{event_id}/participants/count")
+def participants_count_api(event_id: str):
+    participants = get_event_participants(event_id)
+    return {"event_id": event_id, "count": len(participants)}
 
-    supabase.table("event_participants") \
-        .delete() \
-        .eq("event_id", event_id) \
-        .eq("user_id", participant_id) \
+
+@router.get("/{event_id}/my-status")
+def my_status_api(event_id: str, user=Depends(get_current_user)):
+    response = (
+        supabase.table("event_participants")
+        .select("status")
+        .eq("event_id", event_id)
+        .eq("user_id", user.id)
         .execute()
+    )
+    if response.data:
+        return {"joined": True, "status": response.data[0]["status"]}
+    return {"joined": False, "status": None}
 
-    return {"message": "Participant removed"}
+@router.delete("/{event_id}/participants/{participant_id}")
+def remove_participant_api(event_id: str, participant_id: str, user=Depends(get_current_user)):
+    return remove_participant(user.id, event_id, participant_id)
 
 @router.get("/my/events")
 def my_events(user=Depends(get_current_user)):

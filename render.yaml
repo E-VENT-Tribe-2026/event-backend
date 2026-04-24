@@ -3,12 +3,36 @@ services:
     name: event-backend
     env: python
     buildCommand: pip install -r requirements.txt
-    # Points to 'app.main:app' because your main.py is inside the app/ folder
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
-        sync: false # Set this in the Render dashboard manually
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: event-reminder-cron
+    env: python
+    schedule: "0 * * * *"  # every hour
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      curl -s -X POST
+      https://e-vent-orchestrator.onrender.com/api/reminders/trigger
+      -H "x-cron-secret: $CRON_SECRET"
+    envVars:
+      - key: CRON_SECRET
         sync: false
