@@ -69,7 +69,7 @@ def join_event(user_id: str, event_id: str):
         user_id,
         event_id,
         "joined_event",
-        f"You have joined '{title} event'"
+        f"You have joined '{title}' event"
     )
 
     # Email participant only
