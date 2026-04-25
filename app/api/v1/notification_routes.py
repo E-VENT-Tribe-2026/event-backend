@@ -4,7 +4,6 @@ from app.services.notification_service import (
     get_notifications,
     mark_as_read,
     delete_notification,
-    delete_all_notifications,
 )
 
 router = APIRouter()
@@ -26,8 +25,3 @@ def mark_read(notification_id: int, user=Depends(get_current_user)):
 @router.delete("/{notification_id}")
 def remove_notification(notification_id: int, user=Depends(get_current_user)):
     return delete_notification(notification_id, user.id)
-
-
-@router.delete("/")
-def remove_all_notifications(user=Depends(get_current_user)):
-    return delete_all_notifications(user.id)
