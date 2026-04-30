@@ -3,9 +3,9 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
-from app.schemas.auth_schema import RegisterRequest, LoginRequest
+from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
 # Removed 'reset_password' from the import below to prevent function name collisions
-from app.services.auth_service import register_user, login_user, request_password_reset
+from app.services.auth_service import register_user, login_user, request_password_reset, change_password
 from app.core.dependencies import get_current_user
 import httpx
 
@@ -66,40 +66,18 @@ def forgot_password(body: PasswordResetRequestBody):
 
 
 @router.post("/reset-password")
-async def update_user_password(payload: ResetPasswordPayload):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Missing Supabase Env Vars")
+def update_user_password(payload: ResetPasswordPayload):
+    return reset_password(
+        access_token=payload.access_token,
+        new_password=payload.new_password
+    )
 
-    try:
-        # Step 1: Verify the user token using the standard client
-        user_response = supabase.auth.get_user(payload.access_token)
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid token")
 
-        # Step 2: Direct REST API Call (Bypasses the python library entirely)
-        # This forces Supabase to recognize the Admin privileges.
-        url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_response.user.id}"
-        
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", # MUST be the Service Key here
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "password": payload.new_password
-        }
-
-        # Make the request to force the password change
-        async with httpx.AsyncClient() as client:
-            response = await client.put(url, headers=headers, json=data)
-
-        # Catch specific errors from the REST API
-        if response.status_code != 200:
-            error_msg = response.json().get("msg", response.text)
-            raise HTTPException(status_code=400, detail=f"Admin Update Failed: {error_msg}")
-
-        return {"message": "Password updated successfully."}
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Auth Error: {str(e)}")
+@router.post("/change-password")
+def change_user_password(data: ChangePasswordRequest, user=Depends(get_current_user)):
+    return change_password(
+        email=user.email,
+        user_id=user.id,
+        current_password=data.current_password,
+        new_password=data.new_password
+    )

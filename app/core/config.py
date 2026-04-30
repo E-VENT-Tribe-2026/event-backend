@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SUPABASE_URL: str
     SUPABASE_SERVICE_KEY: str
+    SUPABASE_ANON_KEY: str
 
     # Add these missing fields to match your .env
     SUPABASE_JWT_SECRET: str

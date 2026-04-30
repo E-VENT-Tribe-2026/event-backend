@@ -3,6 +3,8 @@ from openai import APIError
 from app.db.supabase_client import supabase
 from gotrue.errors import AuthApiError
 from app.utils.embedding_helper import generate_embedding
+from app.core.config import settings
+
 
 def register_user(
     email: str, 
@@ -118,26 +120,98 @@ def login_user(email: str, password: str):
         )
 
 def request_password_reset(email: str):
+    """
+    Step 1: Validate email exists + send reset email
+    """
+
     try:
-        supabase.auth.reset_password_email(email)
-        return {"message": "If an account exists with that email, a reset link has been sent."}
+        # Try sending reset email (Supabase handles existence internally)
+        supabase.auth.reset_password_email(
+            email,
+            {
+                "redirect_to": f"{settings.FRONTEND_URL}/reset-password"
+            }
+        )
+
+        return {"message": "Password reset email sent."}
+
     except AuthApiError as e:
-        raise HTTPException(status_code=400, detail=f"Auth Error: {str(e)}")
+        error_msg = str(e).lower()
+
+        if "user not found" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Email not registered."
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Auth Error: {str(e)}"
+        )
 
 
 def reset_password(access_token: str, new_password: str):
-    try:
-        # Verify the token and get the user
-        user_response = supabase.auth.get_user(access_token)
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+    """
+    Step 2: Validate token + update password
+    """
 
-        # Use admin client to update password directly — no session needed
+    try:
+        # Validate token
+        user_response = supabase.auth.get_user(access_token)
+
+        if not user_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired reset link."
+            )
+
+        # Update password using admin privileges
         supabase.auth.admin.update_user_by_id(
             user_response.user.id,
+            {"password": new_password}
+        )
+
+        return {"message": "Password updated successfully."}
+
+    except AuthApiError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset link."
+        )
+
+def change_password(email: str, user_id: str, current_password: str, new_password: str):
+    if current_password == new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password cannot be the same as the previous/current password."
+        )
+
+    try:
+        # Verify the current password by trying to log in
+        verify_response = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": current_password
+        })
+
+        if verify_response.session is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect current password."
+            )
+
+        # Proceed to update the password using the admin client
+        # as it allows direct modification by ID and avoids session issues in the python client
+        supabase.auth.admin.update_user_by_id(
+            user_id,
             {"password": new_password}
         )
         return {"message": "Password updated successfully."}
 
     except AuthApiError as e:
+        error = str(e).lower()
+        if "invalid login credentials" in error:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect current password."
+            )
         raise HTTPException(status_code=400, detail=f"Auth Error: {str(e)}")

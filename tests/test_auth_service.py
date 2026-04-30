@@ -136,3 +136,38 @@ class TestLoginUser:
         with pytest.raises(HTTPException) as exc:
             login_user("a@b.com", "wrong")
         assert exc.value.status_code == 401
+
+# ──────────────────────────────────────────────
+# change_password
+# ──────────────────────────────────────────────
+
+class TestChangePassword:
+    def test_change_password_same_password_raises_400(self):
+        from app.services.auth_service import change_password
+        with pytest.raises(HTTPException) as exc:
+            change_password("test@test.com", "u1", "samepass", "samepass")
+        assert exc.value.status_code == 400
+        assert "cannot be the same" in exc.value.detail.lower()
+
+    @patch("app.services.auth_service.supabase")
+    def test_change_password_invalid_current_password_raises_401(self, mock_sb):
+        from app.services.auth_service import change_password
+        mock_sb.auth.sign_in_with_password.return_value = MagicMock(session=None)
+        
+        with pytest.raises(HTTPException) as exc:
+            change_password("test@test.com", "u1", "wrong", "newpass")
+        assert exc.value.status_code == 401
+        assert "incorrect current password" in exc.value.detail.lower()
+
+    @patch("app.services.auth_service.supabase")
+    def test_change_password_success(self, mock_sb):
+        from app.services.auth_service import change_password
+        mock_sb.auth.sign_in_with_password.return_value = MagicMock(session="valid_session")
+        
+        result = change_password("test@test.com", "u1", "correct", "newpass")
+        
+        assert result["message"] == "Password updated successfully."
+        mock_sb.auth.admin.update_user_by_id.assert_called_once_with(
+            "u1",
+            {"password": "newpass"}
+        )
