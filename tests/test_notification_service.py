@@ -115,3 +115,45 @@ class TestMarkAsRead:
         chain.update.assert_called_once_with({"is_read": True})
         # Two .eq() calls: one for id, one for user_id
         assert chain.eq.call_count == 2
+
+
+class TestMarkAllAsRead:
+    @patch("app.services.notification_service.supabase")
+    def test_mark_all_as_read_calls_update_with_filters(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[])
+
+        from app.services.notification_service import mark_all_as_read
+        mark_all_as_read("u1")
+
+        chain.update.assert_called_once_with({"is_read": True})
+        # Two .eq() calls: one for user_id, one for is_read=False
+        assert chain.eq.call_count == 2
+        
+        # Verify specific filter calls
+        calls = [
+            call("user_id", "u1"),
+            call("is_read", False)
+        ]
+        chain.eq.assert_has_calls(calls, any_order=True)
+
+
+class TestDeleteSelected:
+    @patch("app.services.notification_service.supabase")
+    def test_delete_selected_calls_delete_with_filters(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.delete.return_value = chain
+        chain.eq.return_value = chain
+        chain.in_.return_value = chain
+        chain.execute.return_value = MagicMock(data=[])
+
+        from app.services.notification_service import delete_selected_notifications
+        delete_selected_notifications([1, 2, 3], "u1")
+
+        chain.delete.assert_called_once()
+        chain.eq.assert_called_once_with("user_id", "u1")
+        chain.in_.assert_called_once_with("id", [1, 2, 3])
