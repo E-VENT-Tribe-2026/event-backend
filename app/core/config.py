@@ -2,23 +2,30 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from typing import Optional
 
+
 class Settings(BaseSettings):
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
     PROJECT_NAME: str = "E-VENT Orchestrator"
-    
-    # Existing required fields
+
+    # Required fields
     DATABASE_URL: str
     SUPABASE_URL: str
     SUPABASE_SERVICE_KEY: str
-    SUPABASE_ANON_KEY: str
+    SUPABASE_ANON_KEY: Optional[str] = None
 
-    # Add these missing fields to match your .env
     SUPABASE_JWT_SECRET: str
     BACKEND_URL: str
     FRONTEND_URL: str
-    
-    # Optional: If you have the Mixedbread key in .env, add it here too
+
+    # Optional extras
     MXBAI_API_KEY: Optional[str] = None
 
     # Email / SMTP settings
@@ -28,14 +35,7 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     EMAIL_FROM: str = "no-reply@eventapp.com"
 
-    # Cron job secret (used to protect the /reminders/trigger endpoint)
     CRON_SECRET: Optional[str] = None
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        # This prevents the "extra_forbidden" error by ignoring 
-        # any .env variables not defined above.
-        extra = "ignore" 
 
 settings = Settings()
