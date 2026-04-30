@@ -94,3 +94,22 @@ def delete_all_notifications(user_id: str):
         .execute()
 
     return {"message": "All notifications deleted"}
+
+
+def mark_all_as_read(user_id: str):
+    supabase.table("notifications") \
+        .update({"is_read": True}) \
+        .eq("user_id", user_id) \
+        .eq("is_read", False) \
+        .execute()
+    return {"message": "All notifications marked as read"}
+
+
+def delete_selected_notifications(notification_ids: list[int], user_id: str):
+    supabase.table("notifications") \
+        .delete() \
+        .eq("user_id", user_id) \
+        .in_("id", notification_ids) \
+        .execute()
+
+    return {"message": "Selected notifications deleted"}
