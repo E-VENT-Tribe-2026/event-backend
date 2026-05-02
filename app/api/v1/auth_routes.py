@@ -71,18 +71,17 @@ def update_user_password(payload: ResetPasswordPayload):
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 
-    from app.core.security import verify_token
-
-    claims = verify_token(payload.access_token)
-    user_id = claims.get("sub")
-    email = claims.get("email")
-
-    if not user_id or not email:
+    try:
+        user_response = supabase_admin.auth.get_user(payload.access_token)
+        if not user_response.user:
+            raise HTTPException(status_code=401, detail="Invalid token.")
+        user = user_response.user
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid token.")
 
     return change_password(
-        email=email,
-        user_id=user_id,
+        email=user.email,
+        user_id=user.id,
         current_password=payload.current_password,
         new_password=payload.new_password
     )
