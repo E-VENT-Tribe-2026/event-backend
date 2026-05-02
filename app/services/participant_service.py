@@ -99,6 +99,8 @@ def leave_event(user_id: str, event_id: str):
         post_system_notification(event_id, f"👋 {display_name} has left this chat")
         create_notification(event["created_by"], event_id, "user_left",
                             f"{display_name} left your event '{title}'")
+        create_notification(user_id, event_id, "left_event",
+                            f"You have left '{title}'")
     except Exception as e:
         logger.error(f"Leave side effects failed: {e}")
 
