@@ -4,8 +4,7 @@ from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
 from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
-# Removed 'reset_password' from the import below to prevent function name collisions
-from app.services.auth_service import register_user, login_user, request_password_reset, change_password
+from app.services.auth_service import register_user, login_user, request_password_reset, change_password, reset_password
 from app.core.dependencies import get_current_user
 import httpx
 
@@ -14,7 +13,9 @@ class PasswordResetRequestBody(BaseModel):
 
 class ResetPasswordPayload(BaseModel):
     access_token: str
+    current_password: str
     new_password: str
+    confirm_password: str
 
 router = APIRouter()
 
@@ -67,6 +68,8 @@ def forgot_password(body: PasswordResetRequestBody):
 
 @router.post("/reset-password")
 def update_user_password(payload: ResetPasswordPayload):
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
     return reset_password(
         access_token=payload.access_token,
         new_password=payload.new_password
