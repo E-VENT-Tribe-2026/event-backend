@@ -71,21 +71,27 @@ def update_user_password(payload: ResetPasswordPayload):
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 
-    from gotrue.errors import AuthApiError
+    # Decode the JWT directly to extract user info — no Supabase call needed
+    from jose import jwt, JWTError
+    from app.core.config import settings
 
     try:
-        # Use the anon client to validate the user's access token
-        anon_client = supabase  # already created with SUPABASE_ANON_KEY above
-        user_response = anon_client.auth.get_user(payload.access_token)
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid or expired token.")
-        user = user_response.user
-    except AuthApiError:
+        claims = jwt.decode(
+            payload.access_token,
+            settings.SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
+        user_id = claims.get("sub")
+        email = claims.get("email")
+        if not user_id or not email:
+            raise HTTPException(status_code=401, detail="Invalid token.")
+    except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
 
     return change_password(
-        email=user.email,
-        user_id=user.id,
+        email=email,
+        user_id=user_id,
         current_password=payload.current_password,
         new_password=payload.new_password
     )
