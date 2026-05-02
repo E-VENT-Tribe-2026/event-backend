@@ -70,8 +70,23 @@ def forgot_password(body: PasswordResetRequestBody):
 def update_user_password(payload: ResetPasswordPayload):
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
-    return reset_password(
-        access_token=payload.access_token,
+
+    # Use the access_token to get the user's email, then verify current password
+    from app.db.supabase_client import supabase as sb
+    from gotrue.errors import AuthApiError
+
+    try:
+        user_response = sb.auth.get_user(payload.access_token)
+        if not user_response.user:
+            raise HTTPException(status_code=401, detail="Invalid or expired token.")
+        user = user_response.user
+    except AuthApiError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+    return change_password(
+        email=user.email,
+        user_id=user.id,
+        current_password=payload.current_password,
         new_password=payload.new_password
     )
 
