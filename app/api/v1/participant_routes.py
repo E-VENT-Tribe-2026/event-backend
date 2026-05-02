@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from app.core.dependencies import get_current_user
 from app.services.event_service import get_event
 from app.db.supabase_client import supabase
 from app.services.participant_service import (
     join_event,
+    _join_side_effects,
     leave_event,
     get_event_participants,
     get_my_events,
@@ -15,10 +16,12 @@ router = APIRouter()
 @router.post("/{event_id}/join")
 def join_event_api(
     event_id: str,
-    user = Depends(get_current_user)
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user)
 ):
-
-    return join_event(user.id, event_id)
+    data, event = join_event(user.id, event_id)
+    background_tasks.add_task(_join_side_effects, user.id, event_id, event)
+    return data
 
 
 @router.post("/{event_id}/leave")
