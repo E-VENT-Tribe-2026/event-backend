@@ -71,12 +71,12 @@ def update_user_password(payload: ResetPasswordPayload):
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 
-    # Use the access_token to get the user's email, then verify current password
-    from app.db.supabase_client import supabase as sb
     from gotrue.errors import AuthApiError
 
     try:
-        user_response = sb.auth.get_user(payload.access_token)
+        # Use the anon client to validate the user's access token
+        anon_client = supabase  # already created with SUPABASE_ANON_KEY above
+        user_response = anon_client.auth.get_user(payload.access_token)
         if not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid or expired token.")
         user = user_response.user
