@@ -71,23 +71,14 @@ def update_user_password(payload: ResetPasswordPayload):
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 
-    # Decode the JWT directly to extract user info — no Supabase call needed
-    from jose import jwt, JWTError
-    from app.core.config import settings
+    from app.core.security import verify_token
 
-    try:
-        claims = jwt.decode(
-            payload.access_token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-        user_id = claims.get("sub")
-        email = claims.get("email")
-        if not user_id or not email:
-            raise HTTPException(status_code=401, detail="Invalid token.")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+    claims = verify_token(payload.access_token)
+    user_id = claims.get("sub")
+    email = claims.get("email")
+
+    if not user_id or not email:
+        raise HTTPException(status_code=401, detail="Invalid token.")
 
     return change_password(
         email=email,
