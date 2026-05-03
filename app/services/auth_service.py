@@ -150,30 +150,109 @@ def request_password_reset(email: str):
         )
 
 
-def reset_password(access_token: str, new_password: str):
+def verify_reset_token(token_hash: str):
     """
-    Step 2: Validate token + update password
+    Step 1.5: Exchange the OTP token_hash from the email link for a JWT access_token.
+    The frontend calls this instead of parsing the URL hash fragment.
     """
 
     try:
-        # Validate token
-        user_response = supabase.auth.get_user(access_token)
+        response = supabase.auth.verify_otp({
+            "token_hash": token_hash,
+            "type": "recovery"
+        })
 
-        if not user_response.user:
+        if not response.session:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired reset link."
+                detail="Invalid or expired reset token."
             )
 
+        return {
+            "access_token": response.session.access_token,
+            "message": "Token verified. Use the access_token to reset your password."
+        }
+
+    except AuthApiError as e:
+        error_msg = str(e).lower()
+        print(f"[verify_reset_token] AuthApiError: {e}")
+
+        if "token has expired" in error_msg or "otp has expired" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Reset token has expired. Please request a new password reset."
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset token."
+        )
+    except Exception as e:
+        print(f"[verify_reset_token] Unexpected error ({type(e).__name__}): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset token."
+        )
+
+
+def reset_password(access_token: str, new_password: str):
+    """
+    Step 2: Validate token + update password.
+    The access_token is a JWT returned by verify_reset_token.
+    We decode it to extract the user ID, then update via admin.
+    """
+    import json
+    import base64
+    from supabase import create_client
+
+    try:
+        # Decode JWT payload (middle segment) to get user ID
+        # JWT format: header.payload.signature
+        parts = access_token.split(".")
+        if len(parts) != 3:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid access token format."
+            )
+
+        # Add padding if needed and decode
+        payload = parts[1]
+        payload += "=" * (4 - len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload))
+
+        user_id = decoded.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid access token: no user ID found."
+            )
+
+        # Create a fresh admin client to ensure we have service role privileges
+        # because the global supabase client's session might have been mutated
+        # by verify_otp or login operations.
+        admin_client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SERVICE_KEY
+        )
+
         # Update password using admin privileges
-        supabase.auth.admin.update_user_by_id(
-            user_response.user.id,
+        admin_client.auth.admin.update_user_by_id(
+            user_id,
             {"password": new_password}
         )
 
         return {"message": "Password updated successfully."}
 
-    except AuthApiError:
+    except HTTPException:
+        raise
+    except AuthApiError as e:
+        print(f"[reset_password] AuthApiError: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset link."
+        )
+    except Exception as e:
+        print(f"[reset_password] Unexpected error ({type(e).__name__}): {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired reset link."
@@ -187,7 +266,9 @@ def change_password(email: str, user_id: str, current_password: str, new_passwor
         )
 
     try:
-        # Verify the current password by trying to log in
+        from supabase import create_client
+        # Verify the current password by trying to log in.
+        # This will mutate the global client's session.
         verify_response = supabase.auth.sign_in_with_password({
             "email": email,
             "password": current_password
@@ -200,11 +281,20 @@ def change_password(email: str, user_id: str, current_password: str, new_passwor
             )
 
         # Proceed to update the password using the admin client
-        # as it allows direct modification by ID and avoids session issues in the python client
-        supabase.auth.admin.update_user_by_id(
+        # Create a fresh admin client to avoid using the mutated global client
+        admin_client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SERVICE_KEY
+        )
+        
+        admin_client.auth.admin.update_user_by_id(
             user_id,
             {"password": new_password}
         )
+        
+        # Optionally sign out the global client to prevent leaking the session
+        supabase.auth.sign_out()
+        
         return {"message": "Password updated successfully."}
 
     except AuthApiError as e:

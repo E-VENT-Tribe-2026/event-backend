@@ -4,13 +4,16 @@ from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
 from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
-# Removed 'reset_password' from the import below to prevent function name collisions
-from app.services.auth_service import register_user, login_user, request_password_reset, change_password
+from app.services.auth_service import register_user, login_user, request_password_reset, verify_reset_token, change_password
+from app.services.auth_service import reset_password as reset_user_password
 from app.core.dependencies import get_current_user
 import httpx
 
 class PasswordResetRequestBody(BaseModel):
     email: EmailStr
+
+class VerifyResetTokenPayload(BaseModel):
+    token_hash: str
 
 class ResetPasswordPayload(BaseModel):
     access_token: str
@@ -65,9 +68,16 @@ def forgot_password(body: PasswordResetRequestBody):
     return request_password_reset(body.email)
 
 
+@router.post("/verify-reset-token")
+def verify_token(payload: VerifyResetTokenPayload):
+    return verify_reset_token(
+        token_hash=payload.token_hash
+    )
+
+
 @router.post("/reset-password")
 def update_user_password(payload: ResetPasswordPayload):
-    return reset_password(
+    return reset_user_password(
         access_token=payload.access_token,
         new_password=payload.new_password
     )
