@@ -53,7 +53,8 @@ class TestAuthRoutes:
             
             response = client.post("/api/auth/change-password", json={
                 "current_password": "password123",
-                "new_password": "password456"
+                "new_password": "password456",
+                "confirm_new_password": "password456"
             }, headers={"Authorization": "Bearer token"})
             
             assert response.status_code == 200

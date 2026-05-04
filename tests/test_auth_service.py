@@ -159,15 +159,19 @@ class TestChangePassword:
         assert exc.value.status_code == 401
         assert "incorrect current password" in exc.value.detail.lower()
 
+    @patch("supabase.create_client")
     @patch("app.services.auth_service.supabase")
-    def test_change_password_success(self, mock_sb):
+    def test_change_password_success(self, mock_sb, mock_create_client):
         from app.services.auth_service import change_password
         mock_sb.auth.sign_in_with_password.return_value = MagicMock(session="valid_session")
+        
+        mock_admin_client = MagicMock()
+        mock_create_client.return_value = mock_admin_client
         
         result = change_password("test@test.com", "u1", "correct", "newpass")
         
         assert result["message"] == "Password updated successfully."
-        mock_sb.auth.admin.update_user_by_id.assert_called_once_with(
+        mock_admin_client.auth.admin.update_user_by_id.assert_called_once_with(
             "u1",
             {"password": "newpass"}
         )
