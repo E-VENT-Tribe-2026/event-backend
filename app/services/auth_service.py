@@ -10,7 +10,7 @@ import httpx
 def register_user(
     email: str, 
     password: str, 
-    dob: str,           
+    dob: str,
     gender: str, 
     interests: list[str],
     full_name: str | None = None
@@ -120,59 +120,102 @@ def login_user(email: str, password: str):
             detail=str(e)
         )
 
+
 def request_password_reset(email: str):
     """
-    Step 1: Validate email exists + send reset email
+    Step 1: Check the email exists via the admin API, then trigger Supabase reset email.
     """
+    # Check whether the email is registered using the admin users list endpoint
+    url = f"{settings.SUPABASE_URL}/auth/v1/admin/users"
+    headers = {
+        "apikey": settings.SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+    }
 
     try:
-        # Try sending reset email (Supabase handles existence internally)
+        resp = httpx.get(url, headers=headers, params={"email": email}, timeout=10)
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to reach authentication service. Please try again later."
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to verify email. Please try again later."
+        )
+
+    users = resp.json().get("users", [])
+    # Filter exact match
+    matched = [u for u in users if u.get("email", "").lower() == email.lower()]
+
+    if not matched:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Email not registered."
+        )
+
+    # Email exists — trigger the Supabase reset email
+    try:
         supabase.auth.reset_password_email(
             email,
             {
                 "redirect_to": f"{settings.FRONTEND_URL}/reset-password"
             }
         )
-
-        return {"message": "Password reset email sent."}
-
     except AuthApiError as e:
-        error_msg = str(e).lower()
-
-        if "user not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Email not registered."
-            )
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Auth Error: {str(e)}"
+            detail=f"Failed to send reset email: {str(e)}"
         )
+
+    return {"message": "Password reset email sent."}
 
 
 def reset_password(access_token: str, new_password: str):
+    """
+    Step 2: Validate the reset token from the email link and update the password.
+    """
     try:
         user_response = supabase.auth.get_user(access_token)
-        if not user_response.user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired reset link.")
-
-        import httpx
-        url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_response.user.id}"
-        headers = {
-            "apikey": settings.SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-            "Content-Type": "application/json",
-        }
-        resp = httpx.put(url, headers=headers, json={"password": new_password}, timeout=10)
-
-        if resp.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Password update failed: {resp.text}")
-
-        return {"message": "Password updated successfully."}
-
     except AuthApiError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired reset link.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset link."
+        )
+
+    if not user_response or not user_response.user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired reset link."
+        )
+
+    user_id = user_response.user.id
+
+    url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+    headers = {
+        "apikey": settings.SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = httpx.put(url, headers=headers, json={"password": new_password}, timeout=10)
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to reach authentication service. Please try again later."
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Password update failed: {resp.text}"
+        )
+
+    return {"message": "Password updated successfully."}
+
 
 def change_password(email: str, user_id: str, current_password: str, new_password: str):
     if current_password == new_password:

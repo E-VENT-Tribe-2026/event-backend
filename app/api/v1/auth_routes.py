@@ -1,21 +1,22 @@
 import os
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
-from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
-from app.services.auth_service import register_user, login_user, request_password_reset, change_password, reset_password
+from app.schemas.auth_schema import (
+    RegisterRequest,
+    LoginRequest,
+    ChangePasswordRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+)
+from app.services.auth_service import (
+    register_user,
+    login_user,
+    request_password_reset,
+    reset_password,
+    change_password,
+)
 from app.core.dependencies import get_current_user
-import httpx
-
-class PasswordResetRequestBody(BaseModel):
-    email: EmailStr
-
-class ResetPasswordPayload(BaseModel):
-    access_token: str
-    current_password: str
-    new_password: str
-    confirm_password: str
 
 router = APIRouter()
 
@@ -47,12 +48,14 @@ def register(data: RegisterRequest):
         interests=data.interests
     )
 
+
 @router.post("/login")
 def login(data: LoginRequest):
     return login_user(
         email=data.email,
         password=data.password
     )
+
 
 @router.get("/me")
 def get_profile(user = Depends(get_current_user)):
@@ -61,29 +64,30 @@ def get_profile(user = Depends(get_current_user)):
         "email": user.email,
     }
 
+
 @router.post("/forgot-password")
-def forgot_password(body: PasswordResetRequestBody):
+def forgot_password(body: ForgotPasswordRequest):
+    """
+    Step 1 — Request a password reset.
+    Validates the email is registered, then sends a reset link via Supabase.
+    Unregistered emails receive a 404 error.
+    """
     return request_password_reset(body.email)
 
 
 @router.post("/reset-password")
-def update_user_password(payload: ResetPasswordPayload):
+def update_user_password(payload: ResetPasswordRequest):
+    """
+    Step 2 — Complete the password reset.
+    Validates the access_token from the email link, then updates the password.
+    Invalid or expired tokens receive a 401 error.
+    """
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 
-    try:
-        user_response = supabase_admin.auth.get_user(payload.access_token)
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid token.")
-        user = user_response.user
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token.")
-
-    return change_password(
-        email=user.email,
-        user_id=user.id,
-        current_password=payload.current_password,
-        new_password=payload.new_password
+    return reset_password(
+        access_token=payload.access_token,
+        new_password=payload.new_password,
     )
 
 
