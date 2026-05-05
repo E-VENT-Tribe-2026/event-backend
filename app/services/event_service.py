@@ -169,6 +169,34 @@ def get_event(event_id: str):
     return response.data
 
 
+def _update_event_side_effects(user_id: str, event_id: str, original_event: dict, updated_event: dict):
+    """Notifications and emails for event update — runs in background."""
+    title = original_event.get("title", "Event")
+    display_name = get_display_name(user_id)
+
+    try:
+        participants = supabase.table("event_participants") \
+            .select("user_id") \
+            .eq("event_id", event_id) \
+            .execute()
+
+        create_notification(user_id, event_id, "event_updated",
+                            f"Event '{title}' was updated by {display_name}")
+
+        for p in (participants.data or []):
+            if p["user_id"] == user_id:
+                continue
+            create_notification(p["user_id"], event_id, "event_updated",
+                                f"Event '{title}' was updated by {display_name}")
+    except Exception as e:
+        logger.error(f"Update notifications failed: {e}")
+
+    try:
+        _email_participants(updated_event, "update")
+    except Exception as e:
+        logger.error(f"Update emails failed: {e}")
+
+
 def update_event(user_id: str, event_id: str, update_data: dict):
     print("UPDATE EVENT CALLED")
 
@@ -196,8 +224,7 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             update_data["event_embedding"] = embedding
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
-    # Fix numeric fields for PostgreSQL bigint
+
     if "cost" in update_data and update_data["cost"] is not None:
         try:
             update_data["cost"] = int(float(update_data["cost"]))
@@ -223,39 +250,9 @@ def update_event(user_id: str, event_id: str, update_data: dict):
 
     print("EVENT UPDATED SUCCESSFULLY")
 
-    participants = supabase.table("event_participants") \
-        .select("user_id") \
-        .eq("event_id", event_id) \
-        .execute()
-
-    print("Participants:", participants.data)
-
-    display_name = get_display_name(user_id)
-
-    create_notification(
-        user_id,
-        event_id,
-        "event_updated",
-        f"Event '{event['title']}' was updated by {display_name}"
-    )
-
-    for p in participants.data:
-        if p["user_id"] == user_id:
-            continue
-
-
-        create_notification(
-            p["user_id"],
-            event_id,
-            "event_updated",
-            f"Event '{event['title']}' was updated by {display_name}"
-        )
-
-    # Send update emails to all participants using the full merged event data
+    # Return result + context needed for background side effects
     updated_event = {**event, **response.data[0]}
-    _email_participants(updated_event, "update")
-
-    return response.data[0]
+    return response.data[0], event, updated_event
 
 def delete_event(user_id: str, event_id: str):
     event = get_event(event_id)

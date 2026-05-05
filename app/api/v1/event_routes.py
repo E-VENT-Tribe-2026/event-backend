@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from app.core.dependencies import get_current_user
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
 from fastapi import HTTPException
@@ -11,7 +11,7 @@ from app.services.event_service import (
     list_events,
     get_all_events_by_user,
     get_max_event_price,
-
+    _update_event_side_effects,
 )
 
 router = APIRouter()
@@ -83,11 +83,15 @@ def create_new_event(
 def update_existing_event(
     event_id: str,
     data: EventUpdateRequest,
+    background_tasks: BackgroundTasks,
     user=Depends(get_current_user)
 ):
     """Update an event. Only the creator can update."""
-    # CHANGE: Add mode="json" here as well
-    return update_event(user.id, event_id, data.model_dump(mode="json", exclude_unset=True))
+    result, original_event, updated_event = update_event(
+        user.id, event_id, data.model_dump(mode="json", exclude_unset=True)
+    )
+    background_tasks.add_task(_update_event_side_effects, user.id, event_id, original_event, updated_event)
+    return result
 
 
 @router.get("/{event_id}")

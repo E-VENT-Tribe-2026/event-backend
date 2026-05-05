@@ -191,7 +191,7 @@ class TestUpdateEvent:
         ]
 
         from app.services.event_service import update_event
-        result = update_event("u1", "e1", {"title": "New"})
+        result, _, _ = update_event("u1", "e1", {"title": "New"})
 
         assert result["title"] == "New"
 
