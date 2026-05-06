@@ -4,18 +4,20 @@ from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
 from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
-from app.services.auth_service import register_user, login_user, request_password_reset, change_password, reset_password
+from app.services.auth_service import register_user, login_user, request_password_reset, verify_reset_token, change_password
+from app.services.auth_service import reset_password as reset_user_password
 from app.core.dependencies import get_current_user
 import httpx
 
 class PasswordResetRequestBody(BaseModel):
     email: EmailStr
 
+class VerifyResetTokenPayload(BaseModel):
+    token_hash: str
+
 class ResetPasswordPayload(BaseModel):
     access_token: str
-    current_password: str
     new_password: str
-    confirm_password: str
 
 router = APIRouter()
 
@@ -66,23 +68,17 @@ def forgot_password(body: PasswordResetRequestBody):
     return request_password_reset(body.email)
 
 
+@router.post("/verify-reset-token")
+def verify_token(payload: VerifyResetTokenPayload):
+    return verify_reset_token(
+        token_hash=payload.token_hash
+    )
+
+
 @router.post("/reset-password")
 def update_user_password(payload: ResetPasswordPayload):
-    if payload.new_password != payload.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match.")
-
-    try:
-        user_response = supabase_admin.auth.get_user(payload.access_token)
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid token.")
-        user = user_response.user
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token.")
-
-    return change_password(
-        email=user.email,
-        user_id=user.id,
-        current_password=payload.current_password,
+    return reset_user_password(
+        access_token=payload.access_token,
         new_password=payload.new_password
     )
 
