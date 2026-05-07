@@ -18,6 +18,12 @@ Base.metadata.bind = engine
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.services.reminder_service import send_event_reminders
+    from app.core.config import settings
+
+    # Log SMTP config on startup so we can verify it's set on Render
+    logger.info(f"SMTP config — host: {settings.SMTP_HOST}, port: {settings.SMTP_PORT}, "
+                f"user: {settings.SMTP_USER}, password_set: {bool(settings.SMTP_PASSWORD)}, "
+                f"from: {settings.EMAIL_FROM}")
 
     scheduler = BackgroundScheduler()
     # Poll every hour; reminder window is 12–13 h before start so each event is caught once

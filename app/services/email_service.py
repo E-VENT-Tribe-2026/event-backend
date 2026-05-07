@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 def send_email(to_email: str, subject: str, body: str, html_body: str = None):
     """Send an email via SMTP. Logs and swallows failures so callers are unaffected."""
+    logger.info(f"Attempting to send email to {to_email} | subject: {subject} | "
+                f"smtp_user: {settings.SMTP_USER} | smtp_configured: {bool(settings.SMTP_USER and settings.SMTP_PASSWORD)}")
     try:
         if html_body:
             msg = MIMEMultipart("alternative")
