@@ -28,6 +28,9 @@ def register_user(
         if not auth_response.user:
             raise HTTPException(status_code=400, detail="Registration failed")
 
+        if auth_response.user.identities is not None and len(auth_response.user.identities) == 0:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+
         user_id = auth_response.user.id
 
         # Generate interest embedding
