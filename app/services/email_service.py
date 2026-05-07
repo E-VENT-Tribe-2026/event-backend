@@ -8,10 +8,36 @@ logger = logging.getLogger(__name__)
 
 
 def send_email(to_email: str, subject: str, body: str, html_body: str = None):
-    """Send an email via SMTP. Logs and swallows failures so callers are unaffected."""
-    logger.info(f"Attempting to send email to {to_email} | subject: {subject} | "
-                f"smtp_user: {settings.SMTP_USER} | smtp_configured: {bool(settings.SMTP_USER and settings.SMTP_PASSWORD)}")
+    """Send an email. Uses Resend API if configured, otherwise falls back to SMTP."""
+    logger.info(f"Attempting to send email to {to_email} | subject: {subject}")
+
+    if settings.RESEND_API_KEY:
+        _send_via_resend(to_email, subject, body, html_body)
+    else:
+        _send_via_smtp(to_email, subject, body, html_body)
+
+
+def _send_via_resend(to_email: str, subject: str, body: str, html_body: str = None):
     try:
+        import resend
+        resend.api_key = settings.RESEND_API_KEY
+        params = {
+            "from": settings.EMAIL_FROM,
+            "to": [to_email],
+            "subject": subject,
+            "text": body,
+        }
+        if html_body:
+            params["html"] = html_body
+        resend.Emails.send(params)
+        logger.info(f"Email sent via Resend to {to_email}")
+    except Exception as e:
+        logger.error(f"Resend email failed to {to_email}: {e}")
+
+
+def _send_via_smtp(to_email: str, subject: str, body: str, html_body: str = None):
+    try:
+        import smtplib
         if html_body:
             msg = MIMEMultipart("alternative")
             msg.attach(MIMEText(body, "plain"))
@@ -28,10 +54,9 @@ def send_email(to_email: str, subject: str, body: str, html_body: str = None):
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.send_message(msg)
 
-        logger.info(f"Email sent to {to_email}: {subject}")
-
+        logger.info(f"Email sent via SMTP to {to_email}")
     except Exception as e:
-        logger.error(f"Email failed to {to_email}: {e}")
+        logger.error(f"SMTP email failed to {to_email}: {e}")
 
 
 def _fmt_dt(dt_str: str) -> str:
