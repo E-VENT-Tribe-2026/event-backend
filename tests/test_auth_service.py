@@ -31,6 +31,7 @@ class TestRegisterUser:
     def _make_auth_response(self, user_id="uid-1", with_session=True):
         user = MagicMock()
         user.id = user_id
+        user.identities = ["identity"]
         session = MagicMock()
         session.access_token = "tok-abc"
         resp = MagicMock()
@@ -105,6 +106,19 @@ class TestRegisterUser:
             register_user("young@b.com", "pass", "2010-01-01", "M", [])
         assert exc.value.status_code == 400
         assert "18 or older" in exc.value.detail
+
+    @patch("app.services.auth_service.supabase")
+    def test_register_existing_user_raises_409(self, mock_sb):
+        resp = MagicMock()
+        resp.user = MagicMock()
+        resp.user.identities = []  # Empty identities indicates user already exists
+        mock_sb.auth.sign_up.return_value = resp
+
+        from app.services.auth_service import register_user
+        with pytest.raises(HTTPException) as exc:
+            register_user("existing@b.com", "pass", "2000-01-01", "M", [])
+        assert exc.value.status_code == 409
+        assert "User already exists" in exc.value.detail
 
 
 # ──────────────────────────────────────────────
