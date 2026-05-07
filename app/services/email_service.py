@@ -276,3 +276,37 @@ def build_removed_from_event_email(event: dict) -> tuple[str, str, str]:
     """
 
     return subject, plain, html
+
+
+def build_leave_event_email(event: dict) -> tuple[str, str, str]:
+    """Email to a participant confirming they left an event."""
+    title = event.get("title") or "Event"
+    subject = f"You've left \"{title}\""
+    plain_lines, html_rows = _event_detail_rows(event)
+
+    plain = (
+        f"Hi there,\n\n"
+        f"You have successfully left the following event:\n\n"
+        f"{plain_lines}\n\n"
+        f"We hope to see you at a future event!\n"
+        f"— The E-VENT Team"
+    )
+
+    html = f"""
+    <html>
+      <body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto;padding:20px;">
+        <h2 style="color:#6B7280;">&#128075; You've left the event</h2>
+        <p>Hi there,</p>
+        <p>You have successfully left the following event:</p>
+        <div style="background:#F3F4F6;border-radius:8px;padding:20px;margin:20px 0;">
+          {html_rows}
+        </div>
+        <p>We hope to see you at a future event!</p>
+        <p style="margin-top:24px;">— <strong>The E-VENT Team</strong></p>
+        <hr style="border:none;border-top:1px solid #E5E7EB;margin-top:32px;" />
+        <p style="font-size:12px;color:#9CA3AF;">You received this because you left this event.</p>
+      </body>
+    </html>
+    """
+
+    return subject, plain, html

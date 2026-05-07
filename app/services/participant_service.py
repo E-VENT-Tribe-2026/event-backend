@@ -99,6 +99,8 @@ def leave_event(user_id: str, event_id: str):
 
 def _leave_side_effects(user_id: str, event_id: str, event: dict):
     """Runs in background after leave response is sent."""
+    from app.services.email_service import send_email, build_leave_event_email
+
     title = event.get("title", "Event")
     try:
         display_name = get_display_name(user_id)
@@ -108,7 +110,15 @@ def _leave_side_effects(user_id: str, event_id: str, event: dict):
         create_notification(user_id, event_id, "left_event",
                             f"You have left '{title}'")
     except Exception as e:
-        logger.error(f"Leave side effects failed: {e}")
+        logger.error(f"Leave notifications failed: {e}")
+
+    try:
+        email = _get_user_email(user_id)
+        if email:
+            subject, plain, html = build_leave_event_email(event)
+            send_email(email, subject, plain, html)
+    except Exception as e:
+        logger.error(f"Leave confirmation email failed for user {user_id}: {e}")
 
 
 def remove_participant(organizer_id: str, event_id: str, participant_id: str):
