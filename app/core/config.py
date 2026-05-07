@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     EMAIL_FROM: str = "no-reply@eventapp.com"
 
+    # Resend API (preferred over SMTP on Render — no port blocking)
+    RESEND_API_KEY: Optional[str] = None
+
     CRON_SECRET: Optional[str] = None
 
 
