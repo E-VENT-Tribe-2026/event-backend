@@ -94,6 +94,12 @@ def leave_event(user_id: str, event_id: str):
     if not response.data:
         raise HTTPException(status_code=400, detail="User not part of event")
 
+    return {"message": "Left event successfully"}, event
+
+
+def _leave_side_effects(user_id: str, event_id: str, event: dict):
+    """Runs in background after leave response is sent."""
+    title = event.get("title", "Event")
     try:
         display_name = get_display_name(user_id)
         post_system_notification(event_id, f"👋 {display_name} has left this chat")
@@ -104,12 +110,8 @@ def leave_event(user_id: str, event_id: str):
     except Exception as e:
         logger.error(f"Leave side effects failed: {e}")
 
-    return {"message": "Left event successfully"}
-
 
 def remove_participant(organizer_id: str, event_id: str, participant_id: str):
-    from app.services.email_service import send_email, build_removed_from_event_email
-
     event = get_event(event_id)
 
     if event["created_by"] != organizer_id:
@@ -120,6 +122,13 @@ def remove_participant(organizer_id: str, event_id: str, participant_id: str):
         .eq("event_id", event_id) \
         .eq("user_id", participant_id) \
         .execute()
+
+    return {"message": "Participant removed"}, event
+
+
+def _remove_side_effects(organizer_id: str, event_id: str, participant_id: str, event: dict):
+    """Runs in background after remove response is sent."""
+    from app.services.email_service import send_email, build_removed_from_event_email
 
     title = event.get("title", "Event")
     organizer_name = get_display_name(organizer_id)
@@ -137,8 +146,6 @@ def remove_participant(organizer_id: str, event_id: str, participant_id: str):
             send_email(email, subject, plain, html)
     except Exception as e:
         logger.error(f"Removal email failed for user {participant_id}: {e}")
-
-    return {"message": "Participant removed"}
 
 
 def get_event_participants(event_id: str):

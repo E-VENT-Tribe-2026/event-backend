@@ -1,17 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from app.core.dependencies import get_current_user
-from app.services.event_service import get_event
 from app.db.supabase_client import supabase
 from app.services.participant_service import (
     join_event,
     _join_side_effects,
     leave_event,
+    _leave_side_effects,
     get_event_participants,
     get_my_events,
     remove_participant,
+    _remove_side_effects,
 )
 
 router = APIRouter()
+
 
 @router.post("/{event_id}/join")
 def join_event_api(
@@ -27,10 +29,12 @@ def join_event_api(
 @router.post("/{event_id}/leave")
 def leave_event_api(
     event_id: str,
-    user = Depends(get_current_user)
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user)
 ):
-
-    return leave_event(user.id, event_id)
+    result, event = leave_event(user.id, event_id)
+    background_tasks.add_task(_leave_side_effects, user.id, event_id, event)
+    return result
 
 
 @router.get("/{event_id}/participants")
@@ -57,11 +61,19 @@ def my_status_api(event_id: str, user=Depends(get_current_user)):
         return {"joined": True, "status": response.data[0]["status"]}
     return {"joined": False, "status": None}
 
+
 @router.delete("/{event_id}/participants/{participant_id}")
-def remove_participant_api(event_id: str, participant_id: str, user=Depends(get_current_user)):
-    return remove_participant(user.id, event_id, participant_id)
+def remove_participant_api(
+    event_id: str,
+    participant_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user)
+):
+    result, event = remove_participant(user.id, event_id, participant_id)
+    background_tasks.add_task(_remove_side_effects, user.id, event_id, participant_id, event)
+    return result
+
 
 @router.get("/my/events")
 def my_events(user=Depends(get_current_user)):
     return get_my_events(user.id)
-
