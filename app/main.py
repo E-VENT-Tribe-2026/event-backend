@@ -6,6 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.api.router import api_router
 from app.db.database import engine, Base
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
 
@@ -43,14 +44,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers['Content-Security-Policy'] = "default-src 'self'"
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # FIXED CORS: Explicitly allowing headers for compatibility
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8081",    # for local dev
+        "https://event-frontend-delta-tawny.vercel.app"
+        ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
-    expose_headers=["*"],
 )
 
 # Include routes
