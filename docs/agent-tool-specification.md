@@ -35,8 +35,8 @@ Tool calls must not expose service-role credentials, internal database errors, o
 ### 3.1 Functional requirements
 
 - **FR-SEARCH-001:** Accept a free-text search query and optional event filters.
-- **FR-SEARCH-002:** Support the product's current discovery filters: category, upcoming status, date, and city.
-- **FR-SEARCH-003:** Support pagination with a positive page number and bounded page size.
+- **FR-SEARCH-002:** Support the product's current discovery filters: category, upcoming status, date, and city (matched against `location_name`).
+- **FR-SEARCH-003:** Support pagination with a positive page number, bounded page size, total record count, and `has_next` calculation.
 - **FR-SEARCH-004:** Return only events visible to the requesting user according to the product's access rules.
 - **FR-SEARCH-005:** Return enough summary data for the assistant to explain and compare results without requiring a detail call for every result.
 - **FR-SEARCH-006:** Return an empty result set with `success: true` when no events match; this is not an error.
@@ -73,6 +73,7 @@ Tool calls must not expose service-role credentials, internal database errors, o
     },
     "city": {
       "type": ["string", "null"],
+      "description": "City or locality name matched against event location_name.",
       "maxLength": 120
     },
     "page": {
@@ -114,7 +115,6 @@ Tool calls must not expose service-role credentials, internal database errors, o
           "start_datetime": { "type": "string", "format": "date-time" },
           "end_datetime": { "type": ["string", "null"], "format": "date-time" },
           "location_name": { "type": ["string", "null"] },
-          "city": { "type": ["string", "null"] },
           "cost": { "type": ["number", "null"], "minimum": 0 },
           "max_capacity": { "type": ["integer", "null"], "minimum": 1 },
           "status": { "type": "string" }
@@ -233,7 +233,7 @@ Tool calls must not expose service-role credentials, internal database errors, o
 - **FR-DRAFT-004:** Normalize dates to ISO 8601 and preserve the supplied timezone information.
 - **FR-DRAFT-005:** Return a draft preview and a list of validation issues, if any.
 - **FR-DRAFT-006:** Do not persist, publish, notify participants, or add the creator as a participant during drafting.
-- **FR-DRAFT-007:** Require explicit user confirmation before any future publish/create action is attempted.
+- **FR-DRAFT-007:** The agent never directly creates, persists, or publishes an event. Drafted events are returned to the user, and event creation occurs exclusively through the user's explicit publish action in the application interface (human-in-the-loop).
 - **FR-DRAFT-008:** Never silently replace invalid or missing user-provided values with defaults. Return a validation issue that the assistant can explain.
 - **FR-DRAFT-009:** Require authentication or an equivalent permission check before allowing a draft to proceed, subject to the final product access policy.
 
@@ -268,7 +268,7 @@ Tool calls must not expose service-role credentials, internal database errors, o
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "DraftNewEventOutput",
   "type": "object",
-  "required": ["request_id", "success", "draft", "validation_issues", "requires_confirmation", "error"],
+  "required": ["request_id", "success", "draft", "validation_issues", "error"],
   "properties": {
     "request_id": { "type": "string", "minLength": 1 },
     "success": { "type": "boolean" },
@@ -300,7 +300,6 @@ Tool calls must not expose service-role credentials, internal database errors, o
         }
       }
     },
-    "requires_confirmation": { "type": "boolean", "const": true },
     "error": { "$ref": "#/$defs/Error" }
   },
   "$defs": {
@@ -317,7 +316,56 @@ Tool calls must not expose service-role credentials, internal database errors, o
 }
 ```
 
-## 6. Cross-tool Error Contract
+## 6. Agent Architecture and Conversational Workflow
+
+### 6.1 Core Agents and Shared Session State
+
+The assistant architecture couples **4 specialized agents** with a centralized **Session State Store (Context Cache)** so that all conversational turns, extracted entity slots, and tool outputs remain synchronized in a single object across the entire chat lifecycle:
+
+1. **`GuardianAgent`:**
+   - **Input Gate:** Screens user prompts to intercept malicious instructions, prompt injection attacks, and irrelevant/off-topic questions before downstream processing.
+   - **Output Gate:** Verifies the final response to ensure no internal errors, secrets, or sensitive system details are leaked.
+2. **`IntentIdentifier`:**
+   - Analyzes the sanitized user prompt and session state to determine the user's intent:
+     - **Tool Calling:** The request requires live event data or drafting (`Search Events`, `Get Event Details`, `Draft New Event`).
+     - **Normal LLM Response:** The request is a general question, product FAQ, or navigation guidance.
+     - **More Information Asking:** The request is ambiguous or incomplete, requiring clarifying follow-up questions.
+3. **`ToolCaller`:**
+   - Dispatches and executes the necessary tool call against backend service functions (`Search Events`, `Get Event Details`, or `Draft New Event`).
+4. **`ResponseCollector`:**
+   - Gathers output from the **`ToolCaller`** (or direct responses from the **`IntentIdentifier`** for FAQs/clarifications), synthesizes the data into a helpful conversational response, and presents draft cards to the user for human-in-the-loop publishing.
+5. **`ConversationStateStore` (Session Cache & Memory Scratchpad):**
+   - A lightweight in-memory cache/state object (e.g., Pydantic state dict or Redis session cache) shared across all agents in the session.
+   - **What it stores:**
+     - **Chat History:** Full multi-turn dialogue (user prompts, tool calls, model answers).
+     - **Entity Slot Cache:** Progressively extracted event fields (e.g., title, category, date, location).
+     - **Tool Execution Cache:** Cached outputs from prior tool runs to avoid duplicate queries within the same session.
+     - **Session Context:** Authenticated user ID, auth JWT token, and user timezone.
+
+### 6.2 Architecture Diagram
+
+Can be refered at agent_archtecture.png
+
+## 7. Security and Guardrails
+
+To protect user data, prevent service abuse, and ensure safe agent behavior, the integration enforces the following security boundaries:
+
+1. **Human-in-the-Loop Event Creation:**
+   The agent has read and draft preview capabilities only. It cannot autonomously persist, publish, or modify events in the database. All event creation occurs only when the human user reviews the draft card in the UI and explicitly triggers the application's publish method (`POST /api/v1/events/`).
+2. **Authenticated User Session Tokens:**
+   All tool operations invoked on behalf of a user strictly pass and execute under that user's authenticated session credentials (JWT / Bearer token). The agent is never granted elevated system privileges or access to the Supabase service-role key (`SUPABASE_SERVICE_KEY`).
+3. **Zero Direct Database Access:**
+   The agent has no direct connection string, network route, or permission to execute raw database queries against PostgreSQL / Supabase.
+4. **Backend Function Reuse:**
+   Tool implementations do not reimplement business logic; they strictly wrap existing, audited FastAPI endpoints and backend service functions (e.g., `app/services/event_service.py`). This guarantees that row-level security (RLS), field validations, coordinate checks, and rate limits are uniformly applied.
+5. **Guardian / Guardrail Agent:**
+   A dedicated Guardian Agent acts as an input/output firewall:
+   - **Input Filtering:** Intercepts prompt injection attacks, jailbreaks, system instruction exfiltration attempts, and off-topic requests before they reach the reasoning model.
+   - **Output Filtering:** Verifies that agent replies do not leak internal database errors, access tokens, PII, or prompt templates.
+
+---
+
+## 8. Cross-tool Error Contract
 
 The following error codes are reserved for the initial version:
 
@@ -332,16 +380,22 @@ The following error codes are reserved for the initial version:
 
 When `success` is `false`, the output must contain `error.code` and `error.message`. The message must be safe to show to the assistant and user.
 
-## 7. Acceptance Criteria Traceability
+---
+
+## 9. Acceptance Criteria Traceability
 
 | Acceptance criterion | Evidence in this specification |
 |---|---|
 | Functional requirements for all three tools are written down | Sections 3.1, 4.1, and 5.1 |
 | Every tool call has an input and output schema | Sections 3.2-3.3, 4.2-4.3, and 5.2-5.3 |
+| Agent architecture, intent routing, and conversation framework defined | Section 6 |
+| Security boundaries, human-in-the-loop, and guardrail rules specified | Section 7 |
 | Specification and schemas are stored in the repository | This file: `docs/agent-tool-specification.md` |
-| Specification is signed off | Section 8 must be completed before implementation begins |
+| Specification is signed off | Section 10 must be completed before implementation begins |
 
-## 8. Sign-off
+---
+
+## 10. Sign-off
 
 The specification is not approved until each required approver records a decision. Approval means the approver accepts the functional requirements, schemas, privacy boundary, and draft confirmation behavior in this document.
 
@@ -354,11 +408,14 @@ The specification is not approved until each required approver records a decisio
 
 **Approval rule:** All required roles must record `Approved`. Any `Changes requested` decision returns the document to `DRAFT` and requires a new version after revision.
 
-## 9. Open Decisions Before Sign-off
+---
 
-1. Should the draft tool remain preview-only, or should a separate confirmed create/publish tool be added later?
+## 11. Open Decisions Before Sign-off
+
+1. **Publish Workflow (Resolved):** The draft tool remains preview-only. Event creation is executed by the user via the frontend publish method (human-in-the-loop).
 2. Which event fields are mandatory in the user experience beyond the API minimum: category, location, cost, and capacity?
 3. What visibility rules apply to event search and details: public events only, authenticated users, private/invited events, or another policy?
 4. Should search support a date range and radius/geolocation filters in the first release?
 5. What user identity and permission context will the assistant receive for tool calls?
 6. What are the required names of the product, product owner, engineering owner, conversation owner, and security/privacy approver?
+
