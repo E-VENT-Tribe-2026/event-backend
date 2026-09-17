@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
+from app.utils.validators import validate_username, validate_full_name
+
 
 
 def get_profile(user_id: str):
@@ -53,6 +55,37 @@ def update_profile(user_id: str, update_data: dict):
     """Update profile fields for the authenticated user."""
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
+    if "full_name" in update_data:
+        update_data["full_name"] = validate_full_name(update_data["full_name"])
+
+    if "username" in update_data:
+        curr_resp = (
+            supabase.table("profiles")
+            .select("username")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        if curr_resp.data and curr_resp.data.get("username"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username cannot be changed once chosen."
+            )
+        valid_username = validate_username(update_data["username"])
+        avail = (
+            supabase.table("profiles")
+            .select("id")
+            .eq("username", valid_username)
+            .neq("id", user_id)
+            .execute()
+        )
+        if avail.data and len(avail.data) > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username is unavailable. That username is already in use."
+            )
+        update_data["username"] = valid_username
+
     # If the user updates interests and/or bio, regenerate the interest embedding.
     # We fetch the existing profile so partial updates still produce a correct embedding.
     if "interests" in update_data or "bio" in update_data:
@@ -89,6 +122,69 @@ def update_profile(user_id: str, update_data: dict):
     return response.data[0]
 
 
+def choose_username(user_id: str, username: str, full_name: str):
+    """
+    Allow an account without a username (e.g. existing user or Google sign-in)
+    to choose a username once and save a full name under the same validation rules
+    and availability check used at registration.
+    """
+    valid_username = validate_username(username)
+    valid_full_name = validate_full_name(full_name)
+
+    existing_profile = (
+        supabase.table("profiles")
+        .select("*")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    if existing_profile.data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profile not found"
+        )
+
+    if existing_profile.data.get("username"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username has already been chosen and cannot be changed."
+        )
+
+    # Check username availability
+    avail = (
+        supabase.table("profiles")
+        .select("id")
+        .eq("username", valid_username)
+        .neq("id", user_id)
+        .execute()
+    )
+    if avail.data and len(avail.data) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username is unavailable. That username is already in use."
+        )
+
+    update_payload = {
+        "username": valid_username,
+        "full_name": valid_full_name,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    response = (
+        supabase.table("profiles")
+        .update(update_payload)
+        .eq("id", user_id)
+        .execute()
+    )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update profile."
+        )
+
+    return response.data[0]
+
+
 def update_location(user_id: str, latitude: float, longitude: float):
     """Update the geographic location of the authenticated user."""
     response = (
@@ -119,7 +215,7 @@ def get_public_profile(user_id: str):
     """
     response = (
         supabase.table("profiles")
-        .select("id, full_name, avatar_url, bio, visibility, created_at")
+        .select("id, full_name, avatar_url, bio, visibility, created_at, username")
         .eq("id", user_id)
         .single()
         .execute()
