@@ -334,19 +334,67 @@ The assistant architecture couples **4 specialized agents** with a centralized *
    - Dispatches and executes the necessary tool call against backend service functions (`Search Events`, `Get Event Details`, or `Draft New Event`).
 4. **`ResponseCollector`:**
    - Gathers output from the **`ToolCaller`** (or direct responses from the **`IntentIdentifier`** for FAQs/clarifications), synthesizes the data into a helpful conversational response, and presents draft cards to the user for human-in-the-loop publishing.
-5. **`ConversationStateStore` (Session Cache & Memory Scratchpad):**
-   - A lightweight in-memory cache/state object (e.g., Pydantic state dict or Redis session cache) shared across all agents in the session.
-   - **What it stores:**
-     - **Chat History:** Full multi-turn dialogue (user prompts, tool calls, model answers).
-     - **Entity Slot Cache:** Progressively extracted event fields (e.g., title, category, date, location).
-     - **Tool Execution Cache:** Cached outputs from prior tool runs to avoid duplicate queries within the same session.
-     - **Session Context:** Authenticated user ID, auth JWT token, and user timezone.
+5. **`ConversationStateStore` (Supabase Session Store & Context Scratchpad):**
+   - Pure Supabase-backed persistence (no Redis) managing conversation lifecycle and agent scratchpads.
+   - For every conversational turn, the session record, active slot cache (`context_state`), and recent dialogue are loaded from Supabase into a structured Pydantic state object (`agent_context_json`).
+   - Every agent in the orchestration receives the shared context JSON and multi-turn message history.
+   - Every discrete agent action, tool invocation, and guardrail check is recorded directly to Supabase tables.
 
 ### 6.2 Architecture Diagram
 
 Can be refered at agent_archtecture.png
 
-## 7. Security and Guardrails
+## 7. Data Persistence & Session Storage (Supabase)
+
+All AI assistant dialogues, orchestration states, and agent telemetry are persisted directly in PostgreSQL via Supabase without external cache layers (no Redis).
+
+During orchestration, each agent possesses a `context_data` array attribute containing all previous text messages in the conversation (e.g., `[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]`), providing each agent with the complete conversational history to perform its evaluation, intent identification, tool calling, or response synthesis. Every action taken by each agent is recorded directly into `ai_agent_audit_logs`.
+
+For the frontend, chat sessions and message histories are retrieved directly from these tables to display active and past conversations, including draft preview cards and event search results stored in message metadata.
+
+### 7.1 Database Schema (3 Dedicated Tables)
+
+#### 1. `ai_conversations` (Chat Sessions)
+Represents an ongoing or past chat session between a user and the AI orientation assistant.
+
+| Column | Type | Constraints / Defaults | Description |
+|---|---|---|---|
+| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | Unique session identifier |
+| `user_id` | `UUID` | `NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE` | Owner of the chat session |
+| `title` | `TEXT` | `DEFAULT 'New Conversation'` | Human-readable title (auto-generated from first prompt or user-edited) |
+| `context_state` | `JSONB` | `DEFAULT '{}'::jsonb` | Active entity slot cache (e.g., extracted draft fields, timezone, active filters) |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Session creation timestamp |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Timestamp of last message or state update |
+
+#### 2. `ai_messages` (User-Facing Chat History)
+Stores user queries and assistant responses that are retrieved and presented in the frontend chat interface.
+
+| Column | Type | Constraints / Defaults | Description |
+|---|---|---|---|
+| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | Unique message identifier |
+| `conversation_id` | `UUID` | `NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE` | Linked session |
+| `role` | `TEXT` | `NOT NULL CHECK (role IN ('user', 'assistant', 'system'))` | Sender role |
+| `content` | `TEXT` | `NOT NULL` | Markdown-rendered textual dialogue content |
+| `metadata` | `JSONB` | `DEFAULT '{}'::jsonb` | Rich UI card payloads: draft event previews, search result lists, validation issues, tool references |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Message timestamp |
+
+#### 3. `ai_agent_audit_logs` (Orchestration & Action Telemetry)
+Records every granular step, decision, and tool invocation made by each agent in the orchestration pipeline for transparency, debugging, and guardrail monitoring.
+
+| Column | Type | Constraints / Defaults | Description |
+|---|---|---|---|
+| `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | Unique log entry identifier |
+| `conversation_id` | `UUID` | `NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE` | Linked session |
+| `message_id` | `UUID` | `REFERENCES ai_messages(id) ON DELETE SET NULL` | Linked message if applicable |
+| `user_id` | `UUID` | `REFERENCES auth.users(id) ON DELETE SET NULL` | Authenticated user making the request |
+| `agent_name` | `TEXT` | `NOT NULL` | Name of executing agent (`GuardianAgent`, `IntentIdentifier`, `ToolCaller`, `ResponseCollector`) |
+| `action_taken` | `TEXT` | `NOT NULL` | Action code (e.g., `INPUT_GUARD_PASSED`, `INPUT_GUARD_BLOCKED`, `INTENT_CLASSIFIED`, `TOOL_CALLED`, `TOOL_COMPLETED`, `OUTPUT_GUARD_PASSED`, `DRAFT_GENERATED`) |
+| `execution_payload` | `JSONB` | `DEFAULT '{}'::jsonb` | Input arguments, tool response payload, decision rationales, error traces, and execution duration (ms) |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Action execution timestamp |
+
+---
+
+## 8. Security and Guardrails
 
 To protect user data, prevent service abuse, and ensure safe agent behavior, the integration enforces the following security boundaries:
 
@@ -358,14 +406,14 @@ To protect user data, prevent service abuse, and ensure safe agent behavior, the
    The agent has no direct connection string, network route, or permission to execute raw database queries against PostgreSQL / Supabase.
 4. **Backend Function Reuse:**
    Tool implementations do not reimplement business logic; they strictly wrap existing, audited FastAPI endpoints and backend service functions (e.g., `app/services/event_service.py`). This guarantees that row-level security (RLS), field validations, coordinate checks, and rate limits are uniformly applied.
-5. **Guardian / Guardrail Agent:**
-   A dedicated Guardian Agent acts as an input/output firewall:
+5. **Guardian / Guardrail Agent & Audit Logging:**
+   A dedicated Guardian Agent acts as an input/output firewall, and all security decisions are permanently recorded in `ai_agent_audit_logs`:
    - **Input Filtering:** Intercepts prompt injection attacks, jailbreaks, system instruction exfiltration attempts, and off-topic requests before they reach the reasoning model.
    - **Output Filtering:** Verifies that agent replies do not leak internal database errors, access tokens, PII, or prompt templates.
 
 ---
 
-## 8. Cross-tool Error Contract
+## 9. Cross-tool Error Contract
 
 The following error codes are reserved for the initial version:
 
@@ -382,20 +430,21 @@ When `success` is `false`, the output must contain `error.code` and `error.messa
 
 ---
 
-## 9. Acceptance Criteria Traceability
+## 10. Acceptance Criteria Traceability
 
 | Acceptance criterion | Evidence in this specification |
 |---|---|
 | Functional requirements for all three tools are written down | Sections 3.1, 4.1, and 5.1 |
 | Every tool call has an input and output schema | Sections 3.2-3.3, 4.2-4.3, and 5.2-5.3 |
 | Agent architecture, intent routing, and conversation framework defined | Section 6 |
-| Security boundaries, human-in-the-loop, and guardrail rules specified | Section 7 |
+| Data persistence, 3 Supabase tables, and frontend chat retrieval specified | Section 7 |
+| Security boundaries, human-in-the-loop, and guardrail rules specified | Section 8 |
 | Specification and schemas are stored in the repository | This file: `docs/agent-tool-specification.md` |
-| Specification is signed off | Section 10 must be completed before implementation begins |
+| Specification is signed off | Section 11 must be completed before implementation begins |
 
 ---
 
-## 10. Sign-off
+## 11. Sign-off
 
 The specification is not approved until each required approver records a decision. Approval means the approver accepts the functional requirements, schemas, privacy boundary, and draft confirmation behavior in this document.
 
@@ -410,12 +459,14 @@ The specification is not approved until each required approver records a decisio
 
 ---
 
-## 11. Open Decisions Before Sign-off
+## 12. Open Decisions Before Sign-off
 
 1. **Publish Workflow (Resolved):** The draft tool remains preview-only. Event creation is executed by the user via the frontend publish method (human-in-the-loop).
-2. Which event fields are mandatory in the user experience beyond the API minimum: category, location, cost, and capacity?
-3. What visibility rules apply to event search and details: public events only, authenticated users, private/invited events, or another policy?
-4. Should search support a date range and radius/geolocation filters in the first release?
-5. What user identity and permission context will the assistant receive for tool calls?
-6. What are the required names of the product, product owner, engineering owner, conversation owner, and security/privacy approver?
+2. **Session Persistence (Resolved):** Full Supabase persistence using 3 tables (`ai_conversations`, `ai_messages`, `ai_agent_audit_logs`) without Redis.
+3. Which event fields are mandatory in the user experience beyond the API minimum: category, location, cost, and capacity?
+4. What visibility rules apply to event search and details: public events only, authenticated users, private/invited events, or another policy?
+5. Should search support a date range and radius/geolocation filters in the first release?
+6. What user identity and permission context will the assistant receive for tool calls?
+7. What are the required names of the product, product owner, engineering owner, conversation owner, and security/privacy approver?
+
 
