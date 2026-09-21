@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from app.api.router import api_router
 from app.core.limiter import limiter
+from app.core.jwt_middleware import JWTMiddleware
 from app.db.database import engine, Base
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -73,8 +74,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
-
-
+app.add_middleware(JWTMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

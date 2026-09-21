@@ -41,22 +41,22 @@ class TestAuthRoutes:
         class MockUser:
             id = "u1"
             email = "test@test.com"
-            
+
         def override_get_current_user():
             return MockUser()
-            
+
         from app.core.dependencies import get_current_user
         app.dependency_overrides[get_current_user] = override_get_current_user
-        
+
         try:
             mock_change_password.return_value = {"message": "Password updated successfully."}
-            
+
             response = client.post("/api/auth/change-password", json={
                 "current_password": "password123",
                 "new_password": "password456",
                 "confirm_new_password": "password456"
             }, headers={"Authorization": "Bearer token"})
-            
+
             assert response.status_code == 200
             assert response.json()["message"] == "Password updated successfully."
             mock_change_password.assert_called_once_with(
