@@ -1,10 +1,14 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from apscheduler.schedulers.background import BackgroundScheduler
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from app.api.router import api_router
+from app.core.limiter import limiter
 from app.db.database import engine, Base
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -45,11 +49,14 @@ app = FastAPI(
     title="E-VENT Orchestrator",
     version="1.0.0",
     lifespan=lifespan,
-
     docs_url=None if ENV == "production" else "/docs",
     redoc_url=None if ENV == "production" else "/redoc",
     openapi_url=None if ENV == "production" else "/openapi.json",
 )
+
+# Rate limiter state and error handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

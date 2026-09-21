@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
@@ -7,6 +7,7 @@ from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswor
 from app.services.auth_service import register_user, login_user, request_password_reset, verify_reset_token, change_password
 from app.services.auth_service import reset_password as reset_user_password
 from app.core.dependencies import get_current_user
+from app.core.limiter import limiter
 import httpx
 
 class PasswordResetRequestBody(BaseModel):
@@ -42,44 +43,48 @@ else:
 
 
 @router.post("/register")
-def register(data: RegisterRequest):
+@limiter.limit("10/minute")
+def register(request: Request, data: RegisterRequest):
     return register_user(
         email=data.email,
-        password=data.password, 
+        password=data.password,
         full_name=data.full_name,
-        dob=data.dob.isoformat(), 
+        dob=data.dob.isoformat(),
         gender=data.gender,
         interests=data.interests
     )
 
 @router.post("/login")
-def login(data: LoginRequest):
+@limiter.limit("10/minute")
+def login(request: Request, data: LoginRequest):
     return login_user(
         email=data.email,
         password=data.password
     )
 
 @router.get("/me")
-def get_profile(user = Depends(get_current_user)):
+@limiter.limit("60/minute")
+def get_profile(request: Request, user=Depends(get_current_user)):
     return {
         "id": user.id,
         "email": user.email,
     }
 
 @router.post("/forgot-password")
-def forgot_password(body: PasswordResetRequestBody):
+@limiter.limit("5/minute")
+def forgot_password(request: Request, body: PasswordResetRequestBody):
     return request_password_reset(body.email)
 
 
 @router.post("/verify-reset-token")
-def verify_token(payload: VerifyResetTokenPayload):
-    return verify_reset_token(
-        token_hash=payload.token_hash
-    )
+@limiter.limit("5/minute")
+def verify_token(request: Request, payload: VerifyResetTokenPayload):
+    return verify_reset_token(token_hash=payload.token_hash)
 
 
 @router.post("/reset-password")
-def update_user_password(payload: ResetPasswordPayload):
+@limiter.limit("5/minute")
+def update_user_password(request: Request, payload: ResetPasswordPayload):
     return reset_user_password(
         access_token=payload.access_token,
         new_password=payload.new_password
@@ -87,7 +92,8 @@ def update_user_password(payload: ResetPasswordPayload):
 
 
 @router.post("/change-password")
-def change_user_password(data: ChangePasswordRequest, user=Depends(get_current_user)):
+@limiter.limit("5/minute")
+def change_user_password(request: Request, data: ChangePasswordRequest, user=Depends(get_current_user)):
     return change_password(
         email=user.email,
         user_id=user.id,
