@@ -26,9 +26,12 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
+import logging
+logger = logging.getLogger(__name__)
+
 # 2. Safe Client Initialization (Prevents Uvicorn crashing if Render is missing keys)
 if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY]):
-    print("CRITICAL WARNING: Missing Supabase Environment Variables!")
+    logger.critical("Missing Supabase environment variables — email auth will not work.")
     supabase_admin = None
     supabase = None
 else:

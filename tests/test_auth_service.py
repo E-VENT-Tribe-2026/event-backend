@@ -92,7 +92,7 @@ class TestRegisterUser:
         with pytest.raises(HTTPException) as exc:
             register_user("dup@b.com", "pass", "2000-01-01", "M", [])
         assert exc.value.status_code == 400
-        assert "Auth Error" in exc.value.detail
+        assert "Registration failed" in exc.value.detail
 
     @patch("app.services.auth_service.supabase")
     def test_register_age_check_raises_400(self, mock_sb):

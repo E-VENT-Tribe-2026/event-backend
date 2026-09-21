@@ -49,7 +49,7 @@ def get_all_my_events(user=Depends(get_current_user)):
         return events_response
 
     except Exception as e:
-        print(f"Internal error in /my-events: {e}")
+        logger.error(f"Internal error in /my-events for user {user_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail="Could not fetch events for user"

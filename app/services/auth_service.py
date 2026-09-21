@@ -4,6 +4,9 @@ from app.db.supabase_client import supabase
 from gotrue.errors import AuthApiError
 from app.utils.embedding_helper import generate_embedding
 from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def register_user(
@@ -66,15 +69,17 @@ def register_user(
         }
 
     except AuthApiError as e:
-        raise HTTPException(status_code=400, detail=f"Auth Error: {str(e)}")
-    
+        logger.error(f"register_user AuthApiError: {e}")
+        raise HTTPException(status_code=400, detail="Registration failed. Please try again.")
+
     except APIError as e:
         if "age_18_or_older" in str(e):
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="Registration blocked: You must be 18 or older."
             )
-        raise HTTPException(status_code=400, detail=f"Database Error: {str(e)}")
+        logger.error(f"register_user APIError: {e}")
+        raise HTTPException(status_code=400, detail="Registration failed due to a server error.")
     
     
 from gotrue.errors import AuthApiError
@@ -117,9 +122,10 @@ def login_user(email: str, password: str):
             )
 
         # Fallback for any other auth error
+        logger.error(f"login_user AuthApiError: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
+            detail="Login failed. Please check your credentials."
         )
 
 def request_password_reset(email: str):
@@ -147,9 +153,10 @@ def request_password_reset(email: str):
                 detail="Email not registered."
             )
 
+        logger.error(f"request_password_reset AuthApiError: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Auth Error: {str(e)}"
+            detail="Unable to process password reset request. Please try again."
         )
 
 
@@ -178,7 +185,7 @@ def verify_reset_token(token_hash: str):
 
     except AuthApiError as e:
         error_msg = str(e).lower()
-        print(f"[verify_reset_token] AuthApiError: {e}")
+        logger.error(f"verify_reset_token AuthApiError: {e}")
 
         if "token has expired" in error_msg or "otp has expired" in error_msg:
             raise HTTPException(
@@ -191,7 +198,7 @@ def verify_reset_token(token_hash: str):
             detail="Invalid or expired reset token."
         )
     except Exception as e:
-        print(f"[verify_reset_token] Unexpected error ({type(e).__name__}): {e}")
+        logger.error(f"verify_reset_token unexpected error ({type(e).__name__}): {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired reset token."
@@ -249,13 +256,13 @@ def reset_password(access_token: str, new_password: str):
     except HTTPException:
         raise
     except AuthApiError as e:
-        print(f"[reset_password] AuthApiError: {e}")
+        logger.error(f"reset_password AuthApiError: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired reset link."
         )
     except Exception as e:
-        print(f"[reset_password] Unexpected error ({type(e).__name__}): {e}")
+        logger.error(f"reset_password unexpected error ({type(e).__name__}): {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired reset link."
@@ -307,4 +314,5 @@ def change_password(email: str, user_id: str, current_password: str, new_passwor
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect current password."
             )
-        raise HTTPException(status_code=400, detail=f"Auth Error: {str(e)}")
+        logger.error(f"change_password AuthApiError: {e}")
+        raise HTTPException(status_code=400, detail="Password update failed. Please try again.")
