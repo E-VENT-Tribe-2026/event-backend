@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from openai import APIError
+from postgrest.exceptions import APIError
 from app.db.supabase_client import supabase
 from gotrue.errors import AuthApiError
 from app.utils.embedding_helper import generate_embedding

@@ -148,10 +148,8 @@ class TestRegisterUser:
 
     @patch("app.services.auth_service.supabase")
     def test_register_age_check_raises_400(self, mock_sb):
-        from openai import APIError
-        mock_sb.auth.sign_up.side_effect = APIError(
-            message="age_18_or_older constraint", request=MagicMock(), body={}
-        )
+        from postgrest.exceptions import APIError
+        mock_sb.auth.sign_up.side_effect = APIError({"message": "age_18_or_older constraint"})
 
         select_chain = MagicMock()
         select_chain.select.return_value = select_chain
