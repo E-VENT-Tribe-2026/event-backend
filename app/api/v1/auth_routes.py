@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
-from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
+from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest, ChooseUsernameRequest
 from app.services.auth_service import register_user, login_user, request_password_reset, verify_reset_token, change_password
 from app.services.auth_service import reset_password as reset_user_password
 from app.core.dependencies import get_current_user
@@ -46,7 +46,8 @@ def register(data: RegisterRequest):
         full_name=data.full_name,
         dob=data.dob.isoformat(), 
         gender=data.gender,
-        interests=data.interests
+        interests=data.interests,
+        username=data.username
     )
 
 @router.post("/login")
@@ -58,10 +59,25 @@ def login(data: LoginRequest):
 
 @router.get("/me")
 def get_profile(user = Depends(get_current_user)):
+    username = None
+    if supabase:
+        try:
+            profile = supabase.table("profiles").select("username").eq("id", user.id).single().execute()
+            if profile.data:
+                username = profile.data.get("username")
+        except Exception:
+            pass
     return {
         "id": user.id,
         "email": user.email,
+        "username": username,
     }
+
+
+@router.post("/choose-username")
+def choose_username_endpoint(data: ChooseUsernameRequest, user=Depends(get_current_user)):
+    from app.services.profile_service import choose_username
+    return choose_username(user_id=user.id, username=data.username, full_name=data.full_name)
 
 @router.post("/forgot-password")
 def forgot_password(body: PasswordResetRequestBody):

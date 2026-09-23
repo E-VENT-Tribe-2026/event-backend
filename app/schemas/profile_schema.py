@@ -4,6 +4,7 @@ from typing import Optional, List
 
 class ProfileResponse(BaseModel):
     id: str
+    username: Optional[str] = None
     full_name: Optional[str]
     phone: Optional[str]
     avatar_url: Optional[str]
@@ -15,6 +16,7 @@ class ProfileResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    username: Optional[str] = None
     full_name: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
