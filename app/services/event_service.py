@@ -126,7 +126,7 @@ def create_event(user_id: str, data: dict):
     event = response.data[0]
     event_id = event["id"]
 
-    print("EVENT CREATED:", event_id)
+    logger.info(f"Event created: {event_id}")
 
     try:
         supabase.table("event_participants").insert({
@@ -134,10 +134,10 @@ def create_event(user_id: str, data: dict):
             "event_id": event_id
         }).execute()
 
-        print("CREATOR ADDED AS PARTICIPANT")
+        logger.info(f"Creator {user_id} added as participant for event {event_id}")
 
     except Exception as e:
-        print("Participant insert failed:", str(e))
+        logger.error(f"Participant insert failed for event {event_id}: {e}")
 
     # Post welcome system message in the event chat
     post_system_notification(event_id, f"👋 Welcome to {event.get('title', 'the event')}! Say hello to everyone.")
@@ -198,7 +198,7 @@ def _update_event_side_effects(user_id: str, event_id: str, original_event: dict
 
 
 def update_event(user_id: str, event_id: str, update_data: dict):
-    print("UPDATE EVENT CALLED")
+    logger.info(f"update_event called for event {event_id} by user {user_id}")
 
     event = get_event(event_id)
 
@@ -248,7 +248,7 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             detail="Event update failed"
         )
 
-    print("EVENT UPDATED SUCCESSFULLY")
+    logger.info(f"Event {event_id} updated successfully")
 
     # Return result + context needed for background side effects
     updated_event = {**event, **response.data[0]}
@@ -308,10 +308,10 @@ def get_all_events_by_user(user_id: str):
         }
 
     except Exception as e:
-        print(f"Error fetching user events: {str(e)}")
+        logger.error(f"get_all_events_by_user error for {user_id}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Database Crash: {str(e)}"
+            detail="Unable to fetch events. Please try again."
         )
 
 
@@ -435,7 +435,7 @@ def get_max_event_price():  # Make sure the name is exactly this
             return response.data[0].get("cost", 0)
         return 0
     except Exception as e:
-        print(f"Database error in get_max_event_price: {e}")
+        logger.error(f"get_max_event_price DB error: {e}")
         return 0
 
 '''def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):

@@ -21,4 +21,4 @@ def trigger_reminders(x_cron_secret: str = Header(default=None)):
         return {"status": "ok", "message": "Reminder job completed"}
     except Exception as e:
         logger.error(f"Reminder job failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Reminder job failed. Check server logs.")
