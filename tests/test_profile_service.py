@@ -1,3 +1,4 @@
+import logging
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
@@ -239,7 +240,7 @@ class TestGetUsername:
 
         assert result == "john_42"
         mock_sb.table.assert_called_with("profiles")
-        chain.select.assert_called_once_with("username")
+        chain.select.assert_called_once_with("username, full_name")
         chain.eq.assert_called_once_with("id", "u1")
 
     @patch("app.services.profile_service.supabase")
@@ -255,11 +256,49 @@ class TestGetUsername:
         assert get_username("u1") == "Someone"
 
     @patch("app.services.profile_service.supabase")
+    def test_falls_back_to_full_name_when_username_empty(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": None, "full_name": "Alice Smith"})
+
+        from app.services.profile_service import get_username
+        assert get_username("u1") == "Alice Smith"
+
+    @patch("app.services.profile_service.supabase")
+    def test_falls_back_to_someone_when_username_and_full_name_blank(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": "  ", "full_name": "  "})
+
+        from app.services.profile_service import get_username
+        assert get_username("u1") == "Someone"
+
+    @patch("app.services.profile_service.supabase")
     def test_falls_back_to_someone_when_lookup_fails(self, mock_sb):
         mock_sb.table.side_effect = Exception("connection error")
 
         from app.services.profile_service import get_username
         assert get_username("u1") == "Someone"
+
+    @patch("app.services.profile_service.supabase")
+    def test_logs_warning_when_lookup_fails(self, mock_sb, caplog):
+        mock_sb.table.side_effect = Exception("connection error")
+
+        from app.services.profile_service import get_username
+        with caplog.at_level(logging.WARNING, logger="app.services.profile_service"):
+            result = get_username("u1")
+
+        assert result == "Someone"
+        assert any(
+            record.levelname == "WARNING" and "u1" in record.getMessage()
+            for record in caplog.records
+        )
 
 
 class TestChooseUsername:
@@ -578,4 +617,264 @@ class TestTicket121ProfileFields:
         payload = chain.update.call_args[0][0]
         assert payload["banner_url"] is None
         assert result["full_name"] == "Alice Updated"
-        assert result["banner"] is None
+        assert result["banner"] is None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Ticket #122 P1: user identity summaries (build_user_summary / get_user_summaries)
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestBuildUserSummary:
+    def test_keys_exact(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1",
+            "username": "john_42",
+            "full_name": "John Doe",
+            "avatar_url": None,
+            "avatar_kind": "icon",
+            "icon_id": "icon_fox",
+        }
+        result = build_user_summary(row)
+        assert set(result.keys()) == {
+            "id", "username", "full_name", "display_name",
+            "avatar_kind", "icon_id", "avatar_url",
+        }
+
+    def test_username_set_becomes_display_name(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1",
+            "username": "  john_42  ",
+            "full_name": "John Doe",
+            "avatar_url": None,
+            "avatar_kind": "icon",
+            "icon_id": "icon_fox",
+        }
+        result = build_user_summary(row)
+        assert result["username"] == "john_42"
+        assert result["display_name"] == "john_42"
+        assert result["avatar_kind"] == "icon"
+        assert result["icon_id"] == "icon_fox"
+
+    def test_username_whitespace_only_becomes_none(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1",
+            "username": "   ",
+            "full_name": "John Doe",
+            "avatar_url": None,
+            "avatar_kind": None,
+            "icon_id": None,
+        }
+        result = build_user_summary(row)
+        assert result["username"] is None
+        assert result["display_name"] == "John Doe"
+        assert result["avatar_kind"] == "icon"
+
+    def test_missing_username_falls_back_to_full_name(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1",
+            "username": None,
+            "full_name": "Legacy Larry",
+            "avatar_url": "https://example.com/p.png",
+            "avatar_kind": "photo",
+            "icon_id": None,
+        }
+        result = build_user_summary(row)
+        assert result["username"] is None
+        assert result["display_name"] == "Legacy Larry"
+        assert result["avatar_kind"] == "photo"
+        assert result["avatar_url"] == "https://example.com/p.png"
+
+    def test_no_username_no_full_name_display_name_none(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1",
+            "username": None,
+            "full_name": None,
+            "avatar_url": None,
+            "avatar_kind": None,
+            "icon_id": None,
+        }
+        result = build_user_summary(row)
+        assert result["display_name"] is None
+
+    def test_avatar_kind_case_insensitive(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1", "username": "a", "full_name": "A",
+            "avatar_url": "https://x/y.png", "avatar_kind": "PHOTO", "icon_id": None,
+        }
+        result = build_user_summary(row)
+        assert result["avatar_kind"] == "photo"
+
+    def test_avatar_kind_unknown_value_defaults_to_icon(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "u1", "username": "a", "full_name": "A",
+            "avatar_url": None, "avatar_kind": "drawing", "icon_id": None,
+        }
+        result = build_user_summary(row)
+        assert result["avatar_kind"] == "icon"
+
+    def test_missing_id_uses_user_id_param(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "username": "a", "full_name": "A",
+            "avatar_url": None, "avatar_kind": "icon", "icon_id": "icon_fox",
+        }
+        result = build_user_summary(row, user_id="fallback-id")
+        assert result["id"] == "fallback-id"
+
+    def test_profile_present_id_takes_priority_over_user_id_param(self):
+        from app.services.profile_service import build_user_summary
+        row = {
+            "id": "real-id", "username": "a", "full_name": "A",
+            "avatar_url": None, "avatar_kind": "icon", "icon_id": None,
+        }
+        result = build_user_summary(row, user_id="ignored-id")
+        assert result["id"] == "real-id"
+
+    def test_profile_none_returns_stub(self):
+        from app.services.profile_service import build_user_summary
+        result = build_user_summary(None, user_id="ghost-id")
+        assert result == {
+            "id": "ghost-id",
+            "username": None,
+            "full_name": None,
+            "display_name": None,
+            "avatar_kind": "icon",
+            "icon_id": None,
+            "avatar_url": None,
+        }
+
+
+class TestGetUserSummaries:
+    def test_empty_input_returns_empty_dict_no_call(self):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            from app.services.profile_service import get_user_summaries
+            result = get_user_summaries([])
+            assert result == {}
+            mock_sb.table.assert_not_called()
+
+    def test_falsy_and_duplicate_ids_dropped_before_query(self):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.in_.return_value = chain
+            chain.execute.return_value = MagicMock(data=[])
+
+            from app.services.profile_service import get_user_summaries
+            get_user_summaries(["u1", None, "u1", "", "u2"])
+
+            mock_sb.table.assert_called_once_with("profiles")
+            called_ids = chain.in_.call_args[0][1]
+            assert set(called_ids) == {"u1", "u2"}
+
+    def test_uses_user_summary_columns_select(self):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            from app.services.profile_service import USER_SUMMARY_COLUMNS
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.in_.return_value = chain
+            chain.execute.return_value = MagicMock(data=[])
+
+            from app.services.profile_service import get_user_summaries
+            get_user_summaries(["u1"])
+
+            chain.select.assert_called_once_with(USER_SUMMARY_COLUMNS)
+            for field in ("id", "username", "full_name", "avatar_url", "avatar_kind", "icon_id"):
+                assert field in USER_SUMMARY_COLUMNS
+
+    def test_returns_summary_per_row_and_stub_for_missing_ids(self):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.in_.return_value = chain
+            chain.execute.return_value = MagicMock(data=[
+                {
+                    "id": "u1", "username": "john_42", "full_name": "John Doe",
+                    "avatar_url": None, "avatar_kind": "icon", "icon_id": "icon_fox",
+                },
+            ])
+
+            from app.services.profile_service import get_user_summaries, build_user_summary
+            result = get_user_summaries(["u1", "u2"])
+
+            assert set(result.keys()) == {"u1", "u2"}
+            assert result["u1"]["username"] == "john_42"
+            assert result["u1"]["icon_id"] == "icon_fox"
+            assert result["u2"] == build_user_summary(None, "u2")
+
+    def test_missing_ids_are_logged_and_still_get_a_stub(self, caplog):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.in_.return_value = chain
+            chain.execute.return_value = MagicMock(data=[
+                {
+                    "id": "u1", "username": "john_42", "full_name": "John Doe",
+                    "avatar_url": None, "avatar_kind": "icon", "icon_id": "icon_fox",
+                },
+            ])
+
+            with caplog.at_level(logging.WARNING, logger="app.services.profile_service"):
+                from app.services.profile_service import get_user_summaries, build_user_summary
+                result = get_user_summaries(["u1", "u2"])
+
+            warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+            assert any("u2" in r.getMessage() for r in warning_records)
+            assert result["u2"] == build_user_summary(None, "u2")
+
+    def test_query_exception_returns_stubs_for_all_requested_ids(self):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            mock_sb.table.side_effect = Exception("boom")
+
+            from app.services.profile_service import get_user_summaries, build_user_summary
+            result = get_user_summaries(["u1", "u2"])
+
+            assert result["u1"] == build_user_summary(None, "u1")
+
+    def test_query_exception_logs_error_with_exc_info(self, caplog):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            mock_sb.table.side_effect = Exception("boom")
+
+            with caplog.at_level(logging.ERROR, logger="app.services.profile_service"):
+                from app.services.profile_service import get_user_summaries, build_user_summary
+                result = get_user_summaries(["u1", "u2"])
+
+            error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+            assert len(error_records) == 1
+            assert error_records[0].exc_info is not None
+            assert result["u1"] == build_user_summary(None, "u1")
+            assert result["u2"] == build_user_summary(None, "u2")
+
+    def test_row_missing_id_is_skipped_and_falls_back_to_stub(self):
+        with patch("app.services.profile_service.supabase") as mock_sb:
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.in_.return_value = chain
+            chain.execute.return_value = MagicMock(data=[
+                {"username": "x", "full_name": "X"},
+            ])
+
+            from app.services.profile_service import get_user_summaries, build_user_summary
+            result = get_user_summaries(["u1"])
+
+            assert result == {"u1": build_user_summary(None, "u1")}
+
+
+class TestBuildUserSummaryNonStringUsername:
+    def test_non_string_username_is_coerced(self):
+        from app.services.profile_service import build_user_summary
+        row = {"id": "u1", "username": 123, "full_name": "A"}
+        result = build_user_summary(row)
+        assert result["username"] == "123"
+        assert result["display_name"] == "123"

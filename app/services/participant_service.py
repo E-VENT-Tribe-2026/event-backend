@@ -4,7 +4,7 @@ from app.db.supabase_client import supabase
 from app.services.notification_service import create_notification
 from app.services.event_service import get_event
 from app.services.chat_service import post_system_notification
-from app.services.profile_service import get_username
+from app.services.profile_service import get_username, build_user_summary
 
 logger = logging.getLogger(__name__)
 
@@ -158,14 +158,35 @@ def _remove_side_effects(organizer_id: str, event_id: str, participant_id: str, 
         logger.error(f"Removal email failed for user {participant_id}: {e}")
 
 
+def _trim_profile(profile: dict) -> dict:
+    return {
+        "full_name": profile.get("full_name"),
+        "avatar_url": profile.get("avatar_url"),
+    }
+
+
+def _single_profile(embed):
+    """Return the embedded profile as one dict, or None, whatever shape PostgREST used."""
+    if isinstance(embed, list):
+        embed = embed[0] if embed else None
+    return embed if isinstance(embed, dict) else None
+
+
 def get_event_participants(event_id: str):
+    """Return an event's participants, each with a user summary; profiles keeps its existing {full_name, avatar_url} shape."""
     response = (
         supabase.table("event_participants")
-        .select("user_id, status, profiles(full_name, avatar_url)")
+        .select("user_id, status, profiles(username, full_name, avatar_url, avatar_kind, icon_id)")
         .eq("event_id", event_id)
         .execute()
     )
-    return response.data
+    rows = response.data or []
+    for row in rows:
+        profile = _single_profile(row.get("profiles"))
+        row["user"] = build_user_summary(profile, row.get("user_id"))
+        # Keep the profiles shape that existing screens read unchanged.
+        row["profiles"] = _trim_profile(profile) if profile is not None else None
+    return rows
 
 
 def get_my_events(user_id: str):

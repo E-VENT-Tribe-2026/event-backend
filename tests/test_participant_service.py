@@ -162,3 +162,219 @@ class TestRemoveSideEffects:
         mock_create_notification.assert_called_once_with(
             "p1", "e1", "removed_from_event", "You have been removed from 'Tech Conference 2026' by alice."
         )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Ticket #122 P1: participant list carries username / full name / avatar summary
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestGetEventParticipantsUserSummary:
+    @patch("app.services.participant_service.supabase")
+    def test_single_query_select_includes_embed_columns(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[])
+
+        from app.services.participant_service import get_event_participants
+        get_event_participants("e1")
+
+        assert mock_sb.table.call_count == 1
+        mock_sb.table.assert_called_once_with("event_participants")
+        select_arg = chain.select.call_args[0][0]
+        assert "user_id" in select_arg
+        assert "status" in select_arg
+        assert "profiles(" in select_arg
+        assert "username" in select_arg
+        assert "full_name" in select_arg
+        assert "avatar_url" in select_arg
+        assert "avatar_kind" in select_arg
+        assert "icon_id" in select_arg
+        chain.eq.assert_called_once_with("event_id", "e1")
+
+    @patch("app.services.participant_service.supabase")
+    def test_user_with_username_and_icon(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u1",
+                "status": "going",
+                "profiles": {
+                    "username": "john_42",
+                    "full_name": "John Doe",
+                    "avatar_url": None,
+                    "avatar_kind": "icon",
+                    "icon_id": "icon_fox",
+                },
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["user_id"] == "u1"
+        assert row["status"] == "going"
+        assert row["profiles"] == {"full_name": "John Doe", "avatar_url": None}
+        assert row["user"]["id"] == "u1"
+        assert row["user"]["username"] == "john_42"
+        assert row["user"]["display_name"] == "john_42"
+        assert row["user"]["avatar_kind"] == "icon"
+        assert row["user"]["icon_id"] == "icon_fox"
+
+    @patch("app.services.participant_service.supabase")
+    def test_user_with_photo(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u2",
+                "status": "going",
+                "profiles": {
+                    "username": "jane99",
+                    "full_name": "Jane Roe",
+                    "avatar_url": "https://cdn.example.com/p.png",
+                    "avatar_kind": "photo",
+                    "icon_id": None,
+                },
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["profiles"] == {"full_name": "Jane Roe", "avatar_url": "https://cdn.example.com/p.png"}
+        assert row["user"]["avatar_kind"] == "photo"
+        assert row["user"]["avatar_url"] == "https://cdn.example.com/p.png"
+
+    @patch("app.services.participant_service.supabase")
+    def test_legacy_account_without_username_falls_back_to_full_name(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u3",
+                "status": "interested",
+                "profiles": {
+                    "username": None,
+                    "full_name": "Legacy Larry",
+                    "avatar_url": None,
+                    "avatar_kind": None,
+                    "icon_id": None,
+                },
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["user"]["username"] is None
+        assert row["user"]["display_name"] == "Legacy Larry"
+        assert row["user"]["avatar_kind"] == "icon"
+
+    @patch("app.services.participant_service.supabase")
+    def test_missing_profile_yields_stub_user_and_none_profiles(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u4",
+                "status": "going",
+                "profiles": None,
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        from app.services.profile_service import build_user_summary
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["profiles"] is None
+        assert row["user"] == build_user_summary(None, "u4")
+
+    @patch("app.services.participant_service.supabase")
+    def test_list_shaped_embed_uses_first_element_and_returns_trimmed_object(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u5",
+                "status": "going",
+                "profiles": [
+                    {
+                        "username": "jill5",
+                        "full_name": "Jill Five",
+                        "avatar_url": "https://cdn.example.com/j.png",
+                        "avatar_kind": "photo",
+                        "icon_id": None,
+                    }
+                ],
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["user"]["id"] == "u5"
+        assert row["user"]["username"] == "jill5"
+        assert row["user"]["avatar_kind"] == "photo"
+        assert row["profiles"] == {"full_name": "Jill Five", "avatar_url": "https://cdn.example.com/j.png"}
+
+    @patch("app.services.participant_service.supabase")
+    def test_empty_list_embed_yields_stub_user_and_none_profiles(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u6",
+                "status": "going",
+                "profiles": [],
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        from app.services.profile_service import build_user_summary
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["user"] == build_user_summary(None, "u6")
+        assert row["profiles"] is None
+
+    @patch("app.services.participant_service.supabase")
+    def test_list_containing_none_yields_stub_user_and_none_profiles(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[
+            {
+                "user_id": "u7",
+                "status": "going",
+                "profiles": [None],
+            }
+        ])
+
+        from app.services.participant_service import get_event_participants
+        from app.services.profile_service import build_user_summary
+        result = get_event_participants("e1")
+
+        row = result[0]
+        assert row["user"] == build_user_summary(None, "u7")
+        assert row["profiles"] is None

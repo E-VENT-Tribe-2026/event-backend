@@ -1,13 +1,34 @@
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.services.profile_service import get_user_summaries, build_user_summary
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Sentinel to distinguish "organizer id not yet looked up" from "looked up
+# but the event/organizer could not be resolved" (which is a legitimate None).
+_ORGANIZER_UNSET = object()
 
 
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────
+
+def _get_organizer_id(event_id: str) -> str | None:
+    """Return the event's organizer id, or None when it cannot be looked up."""
+    try:
+        event_resp = (
+            supabase.table("events")
+            .select("created_by")
+            .eq("id", event_id)
+            .single()
+            .execute()
+        )
+        return event_resp.data.get("created_by") if event_resp.data else None
+    except Exception as e:
+        logger.error(f"Organizer lookup failed for event {event_id}: {e}", exc_info=True)
+        return None
+
 
 def _get_message_or_404(message_id: int) -> dict:
     response = (
@@ -37,38 +58,27 @@ def _assert_participant(user_id: str, event_id: str) -> None:
         )
 
 
-def _enrich_message(msg: dict, event_id: str, organizer_id: str = None, profiles: dict = None) -> dict:
-    """Add sender_name and sender_role to a message dict."""
+def _enrich_message(msg: dict, event_id: str, organizer_id=_ORGANIZER_UNSET, senders: dict = None) -> dict:
+    """Add sender, sender_name and sender_role to a message dict."""
     sid = msg.get("sender_id")
     if not sid:
+        msg["sender"] = None
         msg["sender_name"] = "System"
         msg["sender_role"] = "system"
         return msg
 
-    # If not pre-fetched, look them up individually (used by send_message)
-    if organizer_id is None:
-        event_resp = (
-            supabase.table("events")
-            .select("created_by")
-            .eq("id", event_id)
-            .single()
-            .execute()
-        )
-        organizer_id = event_resp.data.get("created_by") if event_resp.data else None
+    # If not pre-fetched, look them up individually (used by send_message and update_message)
+    if organizer_id is _ORGANIZER_UNSET:
+        organizer_id = _get_organizer_id(event_id)
 
-    if profiles is None:
-        profile_resp = (
-            supabase.table("profiles")
-            .select("full_name")
-            .eq("id", sid)
-            .single()
-            .execute()
-        )
-        full_name = (profile_resp.data or {}).get("full_name") or "Unknown"
-    else:
-        full_name = profiles.get(sid, "Unknown")
+    if senders is None:
+        senders = get_user_summaries([sid])
 
-    msg["sender_name"] = full_name
+    # Defensive fallback only: get_user_summaries already returns a stub for every requested id
+    sender = senders.get(sid) or build_user_summary(None, sid)
+
+    msg["sender"] = dict(sender)
+    msg["sender_name"] = msg["sender"].get("full_name") or "Unknown"
     msg["sender_role"] = "organizer" if sid == organizer_id else "participant"
     return msg
 
@@ -130,29 +140,14 @@ def get_event_messages(user_id: str, event_id: str, page: int = 1, limit: int = 
         return {"event_id": event_id, "page": page, "limit": limit, "data": []}
 
     # Fetch organizer once
-    event_resp = (
-        supabase.table("events")
-        .select("created_by")
-        .eq("id", event_id)
-        .single()
-        .execute()
-    )
-    organizer_id = event_resp.data.get("created_by") if event_resp.data else None
+    organizer_id = _get_organizer_id(event_id)
 
-    # Batch fetch all sender profiles
+    # Batch fetch all sender summaries in a single query
     sender_ids = list({m["sender_id"] for m in messages if m.get("sender_id")})
-    profiles = {}
-    if sender_ids:
-        profiles_resp = (
-            supabase.table("profiles")
-            .select("id, full_name")
-            .in_("id", sender_ids)
-            .execute()
-        )
-        profiles = {p["id"]: p.get("full_name") or "Unknown" for p in (profiles_resp.data or [])}
+    senders = get_user_summaries(sender_ids) if sender_ids else {}
 
     for msg in messages:
-        _enrich_message(msg, event_id, organizer_id=organizer_id, profiles=profiles)
+        _enrich_message(msg, event_id, organizer_id=organizer_id, senders=senders)
 
     return {"event_id": event_id, "page": page, "limit": limit, "data": messages}
 
@@ -176,7 +171,7 @@ def update_message(user_id: str, message_id: int, new_content: str) -> dict:
     if not response.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to update message")
 
-    return response.data[0]
+    return _enrich_message(response.data[0], message["event_id"])
 
 
 def delete_message(user_id: str, message_id: int) -> dict:
