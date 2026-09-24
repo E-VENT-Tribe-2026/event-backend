@@ -7,6 +7,7 @@ from typing import List, Optional
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
+    username: Optional[str] = None
     full_name: Optional[str] = None
     dob: date           
     gender: str         
@@ -32,3 +33,8 @@ class ChangePasswordRequest(BaseModel):
         if self.new_password != self.confirm_new_password:
             raise ValueError("New password and confirm password do not match.")
         return self
+
+
+class ChooseUsernameRequest(BaseModel):
+    username: str
+    full_name: str

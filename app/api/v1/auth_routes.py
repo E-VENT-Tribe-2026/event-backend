@@ -1,14 +1,18 @@
 import os
+import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
-from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest
+from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest, ChooseUsernameRequest
 from app.services.auth_service import register_user, login_user, request_password_reset, verify_reset_token, change_password
 from app.services.auth_service import reset_password as reset_user_password
 from app.core.dependencies import get_current_user
 from app.core.limiter import limiter
 import httpx
+
+logger = logging.getLogger(__name__)
+
 
 class PasswordResetRequestBody(BaseModel):
     email: EmailStr
@@ -27,18 +31,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-import logging
-logger = logging.getLogger(__name__)
-
-# 2. Safe Client Initialization (Prevents Uvicorn crashing if Render is missing keys)
+# 2. Safe Client Initialization
 if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY]):
     logger.critical("Missing Supabase environment variables — email auth will not work.")
     supabase_admin = None
     supabase = None
 else:
-    # Admin Client - WARNING: This client has full database bypass privileges.
     supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    # Standard Client - just for verifying the token securely
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -51,8 +50,10 @@ def register(request: Request, data: RegisterRequest):
         full_name=data.full_name,
         dob=data.dob.isoformat(),
         gender=data.gender,
-        interests=data.interests
+        interests=data.interests,
+        username=data.username
     )
+
 
 @router.post("/login")
 @limiter.limit("10/minute")
@@ -62,13 +63,30 @@ def login(request: Request, data: LoginRequest):
         password=data.password
     )
 
+
 @router.get("/me")
 @limiter.limit("60/minute")
 def get_profile(request: Request, user=Depends(get_current_user)):
+    username = None
+    if supabase:
+        try:
+            profile = supabase.table("profiles").select("username").eq("id", user.id).single().execute()
+            if profile.data:
+                username = profile.data.get("username")
+        except Exception:
+            pass
     return {
         "id": user.id,
         "email": user.email,
+        "username": username,
     }
+
+
+@router.post("/choose-username")
+def choose_username_endpoint(data: ChooseUsernameRequest, user=Depends(get_current_user)):
+    from app.services.profile_service import choose_username
+    return choose_username(user_id=user.id, username=data.username, full_name=data.full_name)
+
 
 @router.post("/forgot-password")
 @limiter.limit("5/minute")

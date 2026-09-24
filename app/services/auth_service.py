@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from openai import APIError
+from postgrest.exceptions import APIError
 from app.db.supabase_client import supabase
 from gotrue.errors import AuthApiError
 from app.utils.embedding_helper import generate_embedding
@@ -9,21 +9,42 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+from app.utils.validators import validate_username, validate_full_name
+
+
 def register_user(
     email: str, 
     password: str, 
     dob: str,           
     gender: str, 
     interests: list[str],
-    full_name: str | None = None
+    full_name: str | None = None,
+    username: str | None = None
 ):
+    valid_username = validate_username(username)
+    valid_full_name = validate_full_name(full_name)
+
+    # Check if username is already in use
+    existing_profile = (
+        supabase.table("profiles")
+        .select("id")
+        .eq("username", valid_username)
+        .execute()
+    )
+    if existing_profile.data and len(existing_profile.data) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username is unavailable. That username is already in use."
+        )
+
     try:
         auth_response = supabase.auth.sign_up({
             "email": email,
             "password": password,
             "options": {
                 "data": {
-                    "full_name": full_name
+                    "full_name": valid_full_name,
+                    "username": valid_username
                 }
             }
         })
@@ -32,7 +53,10 @@ def register_user(
             raise HTTPException(status_code=400, detail="Registration failed")
 
         if auth_response.user.identities is not None and len(auth_response.user.identities) == 0:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email address is unavailable. That email address is already in use. User already exists."
+            )
 
         user_id = auth_response.user.id
 
@@ -46,7 +70,8 @@ def register_user(
             "dob": dob,
             "gender": gender,
             "interests": interests,
-            "full_name": full_name,
+            "full_name": valid_full_name,
+            "username": valid_username,
         }
 
         if interest_embedding:
@@ -69,7 +94,13 @@ def register_user(
         }
 
     except AuthApiError as e:
+        error = str(e).lower()
         logger.error(f"register_user AuthApiError: {e}")
+        if "user already registered" in error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email address is unavailable. That email address is already in use."
+            )
         raise HTTPException(status_code=400, detail="Registration failed. Please try again.")
 
     except APIError as e:
@@ -77,6 +108,11 @@ def register_user(
             raise HTTPException(
                 status_code=400,
                 detail="Registration blocked: You must be 18 or older."
+            )
+        if "profiles_username_key" in str(e) or ("username" in str(e).lower() and "unique" in str(e).lower()):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username is unavailable. That username is already in use."
             )
         logger.error(f"register_user APIError: {e}")
         raise HTTPException(status_code=400, detail="Registration failed due to a server error.")
