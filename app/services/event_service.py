@@ -4,6 +4,7 @@ from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
+from app.services.profile_service import get_username
 import logging
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,7 @@ def create_event(user_id: str, data: dict):
     event = response.data[0]
     event_id = event["id"]
 
-    print("EVENT CREATED:", event_id)
+    logger.info(f"Event created: {event_id}")
 
     try:
         supabase.table("event_participants").insert({
@@ -133,13 +134,13 @@ def create_event(user_id: str, data: dict):
             "event_id": event_id
         }).execute()
 
-        print("CREATOR ADDED AS PARTICIPANT")
+        logger.info(f"Creator {user_id} added as participant for event {event_id}")
 
     except Exception as e:
-        print("Participant insert failed:", str(e))
+        logger.error(f"Participant insert failed for event {event_id}: {e}")
 
-    # Post a system notification message in the event chat
-    post_system_notification(event_id, "🎉 New Event Created")
+    # Post welcome system message in the event chat
+    post_system_notification(event_id, f"👋 Welcome to {event.get('title', 'the event')}! Say hello to everyone.")
 
     create_notification(
         user_id,
@@ -168,8 +169,36 @@ def get_event(event_id: str):
     return response.data
 
 
+def _update_event_side_effects(user_id: str, event_id: str, original_event: dict, updated_event: dict):
+    """Notifications and emails for event update — runs in background."""
+    title = original_event.get("title", "Event")
+    username = get_username(user_id)
+
+    try:
+        participants = supabase.table("event_participants") \
+            .select("user_id") \
+            .eq("event_id", event_id) \
+            .execute()
+
+        create_notification(user_id, event_id, "event_updated",
+                            f"Event '{title}' was updated by {username}")
+
+        for p in (participants.data or []):
+            if p["user_id"] == user_id:
+                continue
+            create_notification(p["user_id"], event_id, "event_updated",
+                                f"Event '{title}' was updated by {username}")
+    except Exception as e:
+        logger.error(f"Update notifications failed: {e}")
+
+    try:
+        _email_participants(updated_event, "update")
+    except Exception as e:
+        logger.error(f"Update emails failed: {e}")
+
+
 def update_event(user_id: str, event_id: str, update_data: dict):
-    print("UPDATE EVENT CALLED")
+    logger.info(f"update_event called for event {event_id} by user {user_id}")
 
     event = get_event(event_id)
 
@@ -195,8 +224,7 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             update_data["event_embedding"] = embedding
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    
-    # Fix numeric fields for PostgreSQL bigint
+
     if "cost" in update_data and update_data["cost"] is not None:
         try:
             update_data["cost"] = int(float(update_data["cost"]))
@@ -220,39 +248,11 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             detail="Event update failed"
         )
 
-    print("EVENT UPDATED SUCCESSFULLY")
+    logger.info(f"Event {event_id} updated successfully")
 
-    participants = supabase.table("event_participants") \
-        .select("user_id") \
-        .eq("event_id", event_id) \
-        .execute()
-
-    print("Participants:", participants.data)
-
-    create_notification(
-        user_id,
-        event_id,
-        "event_updated",
-        f"Event '{event['title']}' was updated by {user_id}"
-    )
-
-    for p in participants.data:
-        if p["user_id"] == user_id:
-            continue
-
-
-        create_notification(
-            p["user_id"],
-            event_id,
-            "event_updated",
-            f"Event '{event['title']}' was updated by {user_id}"
-        )
-
-    # Send update emails to all participants using the full merged event data
+    # Return result + context needed for background side effects
     updated_event = {**event, **response.data[0]}
-    _email_participants(updated_event, "update")
-
-    return response.data[0]
+    return response.data[0], event, updated_event
 
 def delete_event(user_id: str, event_id: str):
     event = get_event(event_id)
@@ -272,12 +272,13 @@ def delete_event(user_id: str, event_id: str):
     if delete_response.data:
         # Send cancellation emails before notifying
         _email_participants(event, "cancellation")
+        username = get_username(user_id)
         for p in participants.data:
             create_notification(
                 p["user_id"],
                 event_id,
                 "event_deleted",
-                f"Event '{event['title']}' was deleted by {user_id}"
+                f"Event '{event['title']}' was deleted by {username}"
             )
     return {"message": "Event deleted successfully"}
 
@@ -307,10 +308,10 @@ def get_all_events_by_user(user_id: str):
         }
 
     except Exception as e:
-        print(f"Error fetching user events: {str(e)}")
+        logger.error(f"get_all_events_by_user error for {user_id}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Database Crash: {str(e)}"
+            detail="Unable to fetch events. Please try again."
         )
 
 
@@ -408,13 +409,15 @@ def cancel_event(user_id: str, event_id: str):
 
     # notify
     from app.services.notification_service import create_notification
+    
+    username = get_username(user_id)
 
     for p in participants.data:
         create_notification(
             p["user_id"],
             event_id,
             "event_cancelled",
-            f"Event '{event['title']}' was cancelled by {user_id}"
+            f"Event '{event['title']}' was cancelled by {username}"
         )
 
     return {"message": "Event cancelled"}
@@ -432,7 +435,7 @@ def get_max_event_price():  # Make sure the name is exactly this
             return response.data[0].get("cost", 0)
         return 0
     except Exception as e:
-        print(f"Database error in get_max_event_price: {e}")
+        logger.error(f"get_max_event_price DB error: {e}")
         return 0
 
 '''def get_events_by_user(user_id: str, page: int = 1, limit: int = 10):

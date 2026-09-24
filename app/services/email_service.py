@@ -8,8 +8,36 @@ logger = logging.getLogger(__name__)
 
 
 def send_email(to_email: str, subject: str, body: str, html_body: str = None):
-    """Send an email via SMTP. Logs and swallows failures so callers are unaffected."""
+    """Send an email. Uses Resend API if configured, otherwise falls back to SMTP."""
+    logger.info(f"Attempting to send email to {to_email} | subject: {subject}")
+
+    if settings.RESEND_API_KEY:
+        _send_via_resend(to_email, subject, body, html_body)
+    else:
+        _send_via_smtp(to_email, subject, body, html_body)
+
+
+def _send_via_resend(to_email: str, subject: str, body: str, html_body: str = None):
     try:
+        import resend
+        resend.api_key = settings.RESEND_API_KEY
+        params = {
+            "from": settings.EMAIL_FROM,
+            "to": [to_email],
+            "subject": subject,
+            "text": body,
+        }
+        if html_body:
+            params["html"] = html_body
+        resend.Emails.send(params)
+        logger.info(f"Email sent via Resend to {to_email}")
+    except Exception as e:
+        logger.error(f"Resend email failed to {to_email}: {e}")
+
+
+def _send_via_smtp(to_email: str, subject: str, body: str, html_body: str = None):
+    try:
+        import smtplib
         if html_body:
             msg = MIMEMultipart("alternative")
             msg.attach(MIMEText(body, "plain"))
@@ -26,10 +54,9 @@ def send_email(to_email: str, subject: str, body: str, html_body: str = None):
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.send_message(msg)
 
-        logger.info(f"Email sent to {to_email}: {subject}")
-
+        logger.info(f"Email sent via SMTP to {to_email}")
     except Exception as e:
-        logger.error(f"Email failed to {to_email}: {e}")
+        logger.error(f"SMTP email failed to {to_email}: {e}")
 
 
 def _fmt_dt(dt_str: str) -> str:
@@ -244,6 +271,40 @@ def build_removed_from_event_email(event: dict) -> tuple[str, str, str]:
         <p style="margin-top:24px;">— <strong>The E-VENT Team</strong></p>
         <hr style="border:none;border-top:1px solid #E5E7EB;margin-top:32px;" />
         <p style="font-size:12px;color:#9CA3AF;">You received this because you were a participant of this event.</p>
+      </body>
+    </html>
+    """
+
+    return subject, plain, html
+
+
+def build_leave_event_email(event: dict) -> tuple[str, str, str]:
+    """Email to a participant confirming they left an event."""
+    title = event.get("title") or "Event"
+    subject = f"You've left \"{title}\""
+    plain_lines, html_rows = _event_detail_rows(event)
+
+    plain = (
+        f"Hi there,\n\n"
+        f"You have successfully left the following event:\n\n"
+        f"{plain_lines}\n\n"
+        f"We hope to see you at a future event!\n"
+        f"— The E-VENT Team"
+    )
+
+    html = f"""
+    <html>
+      <body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto;padding:20px;">
+        <h2 style="color:#6B7280;">&#128075; You've left the event</h2>
+        <p>Hi there,</p>
+        <p>You have successfully left the following event:</p>
+        <div style="background:#F3F4F6;border-radius:8px;padding:20px;margin:20px 0;">
+          {html_rows}
+        </div>
+        <p>We hope to see you at a future event!</p>
+        <p style="margin-top:24px;">— <strong>The E-VENT Team</strong></p>
+        <hr style="border:none;border-top:1px solid #E5E7EB;margin-top:32px;" />
+        <p style="font-size:12px;color:#9CA3AF;">You received this because you left this event.</p>
       </body>
     </html>
     """

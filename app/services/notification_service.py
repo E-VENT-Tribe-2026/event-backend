@@ -71,3 +71,45 @@ def mark_as_read(notification_id: int, user_id: str):
         .eq("id", notification_id) \
         .eq("user_id", user_id) \
         .execute()
+
+
+def delete_notification(notification_id: int, user_id: str):
+    response = supabase.table("notifications") \
+        .delete() \
+        .eq("id", notification_id) \
+        .eq("user_id", user_id) \
+        .execute()
+
+    if not response.data:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    return {"message": "Notification deleted"}
+
+
+def delete_all_notifications(user_id: str):
+    supabase.table("notifications") \
+        .delete() \
+        .eq("user_id", user_id) \
+        .execute()
+
+    return {"message": "All notifications deleted"}
+
+
+def mark_all_as_read(user_id: str):
+    supabase.table("notifications") \
+        .update({"is_read": True}) \
+        .eq("user_id", user_id) \
+        .eq("is_read", False) \
+        .execute()
+    return {"message": "All notifications marked as read"}
+
+
+def delete_selected_notifications(notification_ids: list[int], user_id: str):
+    supabase.table("notifications") \
+        .delete() \
+        .eq("user_id", user_id) \
+        .in_("id", notification_ids) \
+        .execute()
+
+    return {"message": "Selected notifications deleted"}

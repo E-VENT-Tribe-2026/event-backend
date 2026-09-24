@@ -185,11 +185,12 @@ class TestSearchProfiles:
         chain.execute.return_value = MagicMock(data=rows)
 
         from app.services.profile_service import search_profiles
-        result = search_profiles("Alice", page=1, limit=5)
+        result = search_profiles("alice", page=1, limit=5)
 
         assert result["data"] == rows
         assert result["page"] == 1
-        chain.ilike.assert_called_once_with("full_name", "%Alice%")
+        chain.ilike.assert_called_once_with("username", "%alice%")
+        chain.select.assert_called_once_with("id, full_name, avatar_url, bio, visibility")
         chain.range.assert_called_once_with(0, 4)
 
     @patch("app.services.profile_service.supabase")
@@ -206,3 +207,191 @@ class TestSearchProfiles:
         search_profiles("Bob")
 
         chain.eq.assert_any_call("visibility", "public")
+
+    @patch("app.services.profile_service.supabase")
+    def test_search_passes_mixed_case_query_unchanged(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.ilike.return_value = chain
+        chain.range.return_value = chain
+        chain.execute.return_value = MagicMock(data=[])
+
+        from app.services.profile_service import search_profiles
+        search_profiles("JoHn_4")
+
+        chain.ilike.assert_called_once_with("username", "%JoHn_4%")
+
+
+class TestGetUsername:
+    @patch("app.services.profile_service.supabase")
+    def test_returns_username(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": "john_42"})
+
+        from app.services.profile_service import get_username
+        result = get_username("u1")
+
+        assert result == "john_42"
+        mock_sb.table.assert_called_with("profiles")
+        chain.select.assert_called_once_with("username")
+        chain.eq.assert_called_once_with("id", "u1")
+
+    @patch("app.services.profile_service.supabase")
+    def test_falls_back_to_someone_when_username_empty(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": None})
+
+        from app.services.profile_service import get_username
+        assert get_username("u1") == "Someone"
+
+    @patch("app.services.profile_service.supabase")
+    def test_falls_back_to_someone_when_lookup_fails(self, mock_sb):
+        mock_sb.table.side_effect = Exception("connection error")
+
+        from app.services.profile_service import get_username
+        assert get_username("u1") == "Someone"
+
+
+class TestChooseUsername:
+    @patch("app.services.profile_service.supabase")
+    def test_choose_username_success(self, mock_sb):
+        profile = {"id": "u1", "username": None, "full_name": None}
+        updated = {"id": "u1", "username": "john", "full_name": "John Doe"}
+
+        # 1: get profile, 2: check availability, 3: update
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data=profile)
+
+        avail_chain = MagicMock()
+        avail_chain.select.return_value = avail_chain
+        avail_chain.eq.return_value = avail_chain
+        avail_chain.neq.return_value = avail_chain
+        avail_chain.execute.return_value = MagicMock(data=[])
+
+        update_chain = MagicMock()
+        update_chain.update.return_value = update_chain
+        update_chain.eq.return_value = update_chain
+        update_chain.execute.return_value = MagicMock(data=[updated])
+
+        mock_sb.table.side_effect = [profile_chain, avail_chain, update_chain]
+
+        from app.services.profile_service import choose_username
+        result = choose_username("u1", "John", "John Doe")
+
+        assert result == updated
+        update_args = update_chain.update.call_args[0][0]
+        assert update_args["username"] == "john"
+        assert update_args["full_name"] == "John Doe"
+
+    @patch("app.services.profile_service.supabase")
+    def test_choose_username_already_chosen_raises_400(self, mock_sb):
+        profile = {"id": "u1", "username": "existing_user", "full_name": "Existing"}
+
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data=profile)
+
+        mock_sb.table.return_value = profile_chain
+
+        from app.services.profile_service import choose_username
+        with pytest.raises(HTTPException) as exc:
+            choose_username("u1", "new_name", "New Name")
+
+        assert exc.value.status_code == 400
+        assert "already been chosen" in exc.value.detail.lower()
+
+    @patch("app.services.profile_service.supabase")
+    def test_choose_username_taken_raises_409(self, mock_sb):
+        profile = {"id": "u1", "username": None, "full_name": "John"}
+
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data=profile)
+
+        avail_chain = MagicMock()
+        avail_chain.select.return_value = avail_chain
+        avail_chain.eq.return_value = avail_chain
+        avail_chain.neq.return_value = avail_chain
+        avail_chain.execute.return_value = MagicMock(data=[{"id": "other"}])
+
+        mock_sb.table.side_effect = [profile_chain, avail_chain]
+
+        from app.services.profile_service import choose_username
+        with pytest.raises(HTTPException) as exc:
+            choose_username("u1", "taken_user", "John Doe")
+
+        assert exc.value.status_code == 409
+        assert "username is unavailable" in exc.value.detail.lower()
+
+    @patch("app.services.profile_service.supabase")
+    def test_choose_username_profile_not_found_raises_404(self, mock_sb):
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data=None)
+
+        mock_sb.table.return_value = profile_chain
+
+        from app.services.profile_service import choose_username
+        with pytest.raises(HTTPException) as exc:
+            choose_username("ghost", "john_42", "John Doe")
+
+        assert exc.value.status_code == 404
+
+    def test_choose_username_invalid_username_raises_400(self):
+        from app.services.profile_service import choose_username
+        with pytest.raises(HTTPException) as exc:
+            choose_username("u1", "a", "John Doe")
+        assert exc.value.status_code == 400
+
+    def test_choose_username_invalid_full_name_raises_400(self):
+        from app.services.profile_service import choose_username
+        with pytest.raises(HTTPException) as exc:
+            choose_username("u1", "john_42", "   ")
+        assert exc.value.status_code == 400
+
+
+class TestUpdateProfileUsernameAndFullName:
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_cannot_change_existing_username(self, mock_sb):
+        curr_chain = MagicMock()
+        curr_chain.select.return_value = curr_chain
+        curr_chain.eq.return_value = curr_chain
+        curr_chain.single.return_value = curr_chain
+        curr_chain.execute.return_value = MagicMock(data={"username": "alice"})
+
+        mock_sb.table.return_value = curr_chain
+
+        from app.services.profile_service import update_profile
+        with pytest.raises(HTTPException) as exc:
+            update_profile("u1", {"username": "bob"})
+
+        assert exc.value.status_code == 400
+        assert "cannot be changed" in exc.value.detail.lower()
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_blank_full_name_raises_400(self, mock_sb):
+        from app.services.profile_service import update_profile
+        with pytest.raises(HTTPException) as exc:
+            update_profile("u1", {"full_name": "  "})
+
+        assert exc.value.status_code == 400
+        assert "full name is required" in exc.value.detail.lower()
