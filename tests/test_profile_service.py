@@ -185,11 +185,12 @@ class TestSearchProfiles:
         chain.execute.return_value = MagicMock(data=rows)
 
         from app.services.profile_service import search_profiles
-        result = search_profiles("Alice", page=1, limit=5)
+        result = search_profiles("alice", page=1, limit=5)
 
         assert result["data"] == rows
         assert result["page"] == 1
-        chain.ilike.assert_called_once_with("full_name", "%Alice%")
+        chain.ilike.assert_called_once_with("username", "%alice%")
+        chain.select.assert_called_once_with("id, full_name, avatar_url, bio, visibility")
         chain.range.assert_called_once_with(0, 4)
 
     @patch("app.services.profile_service.supabase")
@@ -206,6 +207,59 @@ class TestSearchProfiles:
         search_profiles("Bob")
 
         chain.eq.assert_any_call("visibility", "public")
+
+    @patch("app.services.profile_service.supabase")
+    def test_search_passes_mixed_case_query_unchanged(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.ilike.return_value = chain
+        chain.range.return_value = chain
+        chain.execute.return_value = MagicMock(data=[])
+
+        from app.services.profile_service import search_profiles
+        search_profiles("JoHn_4")
+
+        chain.ilike.assert_called_once_with("username", "%JoHn_4%")
+
+
+class TestGetUsername:
+    @patch("app.services.profile_service.supabase")
+    def test_returns_username(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": "john_42"})
+
+        from app.services.profile_service import get_username
+        result = get_username("u1")
+
+        assert result == "john_42"
+        mock_sb.table.assert_called_with("profiles")
+        chain.select.assert_called_once_with("username")
+        chain.eq.assert_called_once_with("id", "u1")
+
+    @patch("app.services.profile_service.supabase")
+    def test_falls_back_to_someone_when_username_empty(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": None})
+
+        from app.services.profile_service import get_username
+        assert get_username("u1") == "Someone"
+
+    @patch("app.services.profile_service.supabase")
+    def test_falls_back_to_someone_when_lookup_fails(self, mock_sb):
+        mock_sb.table.side_effect = Exception("connection error")
+
+        from app.services.profile_service import get_username
+        assert get_username("u1") == "Someone"
 
 
 class TestChooseUsername:

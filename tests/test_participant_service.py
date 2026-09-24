@@ -112,3 +112,53 @@ class TestMarkAsRead:
         chain.update.assert_called_once_with({"is_read": True})
         # Two .eq() calls: one for id, one for user_id
         assert chain.eq.call_count == 2
+
+
+class TestJoinSideEffects:
+    @patch("app.services.participant_service._get_user_email", return_value=None)
+    @patch("app.services.participant_service.post_system_notification")
+    @patch("app.services.participant_service.create_notification")
+    @patch("app.services.participant_service.get_username", return_value="john")
+    def test_join_side_effects(self, mock_get_username, mock_create_notification, mock_post_system, mock_get_email):
+        from app.services.participant_service import _join_side_effects
+
+        event = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+        _join_side_effects("u1", "e1", event)
+
+        mock_get_username.assert_called_once_with("u1")
+        mock_post_system.assert_called_once_with("e1", "👋 john has joined this chat")
+        mock_create_notification.assert_any_call("org1", "e1", "user_joined", "john joined your event 'Tech Conference 2026'")
+        mock_create_notification.assert_any_call("u1", "e1", "joined_event", "You have joined 'Tech Conference 2026'")
+
+
+class TestLeaveSideEffects:
+    @patch("app.services.participant_service._get_user_email", return_value=None)
+    @patch("app.services.participant_service.post_system_notification")
+    @patch("app.services.participant_service.create_notification")
+    @patch("app.services.participant_service.get_username", return_value="john")
+    def test_leave_side_effects(self, mock_get_username, mock_create_notification, mock_post_system, mock_get_email):
+        from app.services.participant_service import _leave_side_effects
+
+        event = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+        _leave_side_effects("u1", "e1", event)
+
+        mock_get_username.assert_called_once_with("u1")
+        mock_post_system.assert_called_once_with("e1", "👋 john has left this chat")
+        mock_create_notification.assert_any_call("org1", "e1", "user_left", "john left your event 'Tech Conference 2026'")
+        mock_create_notification.assert_any_call("u1", "e1", "left_event", "You have left 'Tech Conference 2026'")
+
+
+class TestRemoveSideEffects:
+    @patch("app.services.participant_service._get_user_email", return_value=None)
+    @patch("app.services.participant_service.create_notification")
+    @patch("app.services.participant_service.get_username", return_value="alice")
+    def test_remove_side_effects(self, mock_get_username, mock_create_notification, mock_get_email):
+        from app.services.participant_service import _remove_side_effects
+
+        event = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+        _remove_side_effects("org1", "e1", "p1", event)
+
+        mock_get_username.assert_called_once_with("org1")
+        mock_create_notification.assert_called_once_with(
+            "p1", "e1", "removed_from_event", "You have been removed from 'Tech Conference 2026' by alice."
+        )

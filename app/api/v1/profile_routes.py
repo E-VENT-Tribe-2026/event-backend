@@ -74,11 +74,11 @@ def update_my_location(
 
 @router.get("/search")
 def search_public_profiles(
-    q: str = Query(..., min_length=1, description="Search query for profile name"),
+    q: str = Query(..., min_length=1, description="Search query for username"),
     page: int = Query(1, ge=1),
     limit: int = Query(10, le=50),
 ):
-    """Search public profiles by name. Public endpoint."""
+    """Search public profiles by username. Public endpoint."""
     return search_profiles(q, page, limit)
 
 

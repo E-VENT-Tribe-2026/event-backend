@@ -25,17 +25,17 @@ def get_profile(user_id: str):
     return response.data
 
 
-def get_display_name(user_id: str) -> str:
-    """Return the user's full_name from profiles, falling back to 'Someone' if empty."""
+def get_username(user_id: str) -> str:
+    """Return the user's username from profiles, falling back to 'Someone' if empty."""
     try:
         result = (
             supabase.table("profiles")
-            .select("full_name")
+            .select("username")
             .eq("id", user_id)
             .single()
             .execute()
         )
-        name = result.data.get("full_name") if result.data else None
+        name = result.data.get("username") if result.data else None
         # if the name is strictly empty or whitespace, treat as missing
         if name and name.strip():
             return name.strip()
@@ -239,7 +239,7 @@ def get_public_profile(user_id: str):
 
 
 def search_profiles(query: str, page: int = 1, limit: int = 10):
-    """Search public profiles by name. Returns only public profiles."""
+    """Search public profiles by username. Returns only public profiles."""
     start = (page - 1) * limit
     end = start + limit - 1
 
@@ -247,7 +247,7 @@ def search_profiles(query: str, page: int = 1, limit: int = 10):
         supabase.table("profiles")
         .select("id, full_name, avatar_url, bio, visibility")
         .eq("visibility", "public")
-        .ilike("full_name", f"%{query}%")
+        .ilike("username", f"%{query}%")
         .range(start, end)
         .execute()
     )
