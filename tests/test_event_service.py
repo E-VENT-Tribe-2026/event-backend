@@ -269,8 +269,9 @@ class TestUpdateEvent:
 # ──────────────────────────────────────────────
 
 class TestDeleteEvent:
+    @patch("app.services.event_service.get_username", return_value="john")
     @patch("app.services.event_service.supabase")
-    def test_delete_success(self, mock_sb):
+    def test_delete_success(self, mock_sb, mock_get_username):
         existing = {"id": "e1", "created_by": "u1"}
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -311,10 +312,11 @@ class TestDeleteEvent:
 # ──────────────────────────────────────────────
 
 class TestCancelEvent:
+    @patch("app.services.event_service.get_username", return_value="john")
     @patch("app.services.event_service._email_participants")
     @patch("app.services.notification_service.create_notification")
     @patch("app.services.event_service.supabase")
-    def test_cancel_success(self, mock_sb, mock_notify, mock_email):
+    def test_cancel_success(self, mock_sb, mock_notify, mock_email, mock_get_username):
         mock_notify.return_value = None
         mock_email.return_value = None
 
@@ -499,3 +501,106 @@ class TestListEvents:
         # This ensures the "upcoming only" logic is active
         from unittest.mock import ANY # Add this import at the top
         chain.gte.assert_any_call("end_datetime", ANY)
+
+
+# ──────────────────────────────────────────────
+# _update_event_side_effects
+# ──────────────────────────────────────────────
+
+class TestUpdateEventSideEffects:
+    @patch("app.services.event_service._email_participants")
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.get_username", return_value="john")
+    @patch("app.services.event_service.supabase")
+    def test_notifies_updater_and_participants(self, mock_sb, mock_get_username, mock_create_notification, mock_email):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"user_id": "org1"}, {"user_id": "p1"}])
+
+        from app.services.event_service import _update_event_side_effects
+        _update_event_side_effects(
+            "org1", "e1",
+            {"title": "Tech Conference 2026"},
+            {"id": "e1", "title": "Tech Conference 2026"},
+        )
+
+        mock_get_username.assert_called_once_with("org1")
+        assert mock_create_notification.call_count == 2
+        mock_create_notification.assert_any_call("org1", "e1", "event_updated", "Event 'Tech Conference 2026' was updated by john")
+        mock_create_notification.assert_any_call("p1", "e1", "event_updated", "Event 'Tech Conference 2026' was updated by john")
+
+
+def _stub_tables(mock_sb, chains):
+    """Route mock_sb.table(name) to the chain registered for that table name."""
+    mock_sb.table.side_effect = lambda name: chains[name]
+
+
+# ──────────────────────────────────────────────
+# delete_event notifications
+# ──────────────────────────────────────────────
+
+class TestDeleteEventNotifications:
+    @patch("app.services.event_service._email_participants")
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.get_username", return_value="john")
+    @patch("app.services.event_service.supabase")
+    @patch("app.services.event_service.get_event")
+    def test_notifies_participants_on_delete(self, mock_get_event, mock_sb, mock_get_username, mock_create_notification, mock_email):
+        mock_get_event.return_value = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+
+        participants_chain = MagicMock()
+        participants_chain.select.return_value = participants_chain
+        participants_chain.eq.return_value = participants_chain
+        participants_chain.execute.return_value = MagicMock(data=[{"user_id": "p1"}])
+
+        events_chain = MagicMock()
+        events_chain.delete.return_value = events_chain
+        events_chain.eq.return_value = events_chain
+        events_chain.execute.return_value = MagicMock(data=[{"id": "e1"}])
+
+        _stub_tables(mock_sb, {"event_participants": participants_chain, "events": events_chain})
+
+        from app.services.event_service import delete_event
+        delete_event("org1", "e1")
+
+        mock_get_username.assert_called_once_with("org1")
+        mock_create_notification.assert_called_once_with(
+            "p1", "e1", "event_deleted", "Event 'Tech Conference 2026' was deleted by john"
+        )
+
+
+# ──────────────────────────────────────────────
+# cancel_event notifications
+# ──────────────────────────────────────────────
+
+class TestCancelEventNotifications:
+    @patch("app.services.event_service._email_participants")
+    @patch("app.services.event_service.get_username", return_value="john")
+    # cancel_event imports create_notification locally, so patch it at its source module
+    @patch("app.services.notification_service.create_notification")
+    @patch("app.services.event_service.supabase")
+    @patch("app.services.event_service.get_event")
+    def test_notifies_participants_on_cancel(self, mock_get_event, mock_sb, mock_create_notification, mock_get_username, mock_email):
+        mock_get_event.return_value = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+
+        events_chain = MagicMock()
+        events_chain.update.return_value = events_chain
+        events_chain.eq.return_value = events_chain
+
+        participants_chain = MagicMock()
+        participants_chain.select.return_value = participants_chain
+        participants_chain.delete.return_value = participants_chain
+        participants_chain.eq.return_value = participants_chain
+        participants_chain.execute.return_value = MagicMock(data=[{"user_id": "p1"}])
+
+        _stub_tables(mock_sb, {"events": events_chain, "event_participants": participants_chain})
+
+        from app.services.event_service import cancel_event
+        cancel_event("org1", "e1")
+
+        mock_get_username.assert_called_once_with("org1")
+        mock_create_notification.assert_called_once_with(
+            "p1", "e1", "event_cancelled", "Event 'Tech Conference 2026' was cancelled by john"
+        )

@@ -4,7 +4,7 @@ from app.db.supabase_client import supabase
 from app.services.notification_service import create_notification
 from app.services.event_service import get_event
 from app.services.chat_service import post_system_notification
-from app.services.profile_service import get_display_name
+from app.services.profile_service import get_username
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +33,16 @@ def _join_side_effects(user_id: str, event_id: str, event: dict):
     from app.services.email_service import send_email, build_join_confirmation_email
 
     title = event.get("title", "Event")
-    display_name = get_display_name(user_id)
+    username = get_username(user_id)
 
     try:
-        post_system_notification(event_id, f"👋 {display_name} has joined this chat")
+        post_system_notification(event_id, f"👋 {username} has joined this chat")
     except Exception as e:
         logger.error(f"System chat notification failed on join: {e}")
 
     try:
         create_notification(event["created_by"], event_id, "user_joined",
-                            f"{display_name} joined your event '{title}'")
+                            f"{username} joined your event '{title}'")
         create_notification(user_id, event_id, "joined_event",
                             f"You have joined '{title}'")
     except Exception as e:
@@ -103,10 +103,10 @@ def _leave_side_effects(user_id: str, event_id: str, event: dict):
 
     title = event.get("title", "Event")
     try:
-        display_name = get_display_name(user_id)
-        post_system_notification(event_id, f"👋 {display_name} has left this chat")
+        username = get_username(user_id)
+        post_system_notification(event_id, f"👋 {username} has left this chat")
         create_notification(event["created_by"], event_id, "user_left",
-                            f"{display_name} left your event '{title}'")
+                            f"{username} left your event '{title}'")
         create_notification(user_id, event_id, "left_event",
                             f"You have left '{title}'")
     except Exception as e:
@@ -141,11 +141,11 @@ def _remove_side_effects(organizer_id: str, event_id: str, participant_id: str, 
     from app.services.email_service import send_email, build_removed_from_event_email
 
     title = event.get("title", "Event")
-    organizer_name = get_display_name(organizer_id)
+    organizer_username = get_username(organizer_id)
 
     try:
         create_notification(participant_id, event_id, "removed_from_event",
-                            f"You have been removed from '{title}' by {organizer_name}.")
+                            f"You have been removed from '{title}' by {organizer_username}.")
     except Exception as e:
         logger.error(f"Remove notification failed: {e}")
 
