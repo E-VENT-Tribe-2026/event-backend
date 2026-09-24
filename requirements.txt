@@ -24,7 +24,7 @@ idna==3.11
 iniconfig==2.3.0
 mixedbread==0.49.0
 openai==1.35.0
-packaging==26.0
+packaging>=22,<25
 pluggy==1.6.0
 postgrest==0.15.1
 psycopg2-binary==2.9.11
@@ -57,3 +57,5 @@ uvicorn==0.30.6
 watchfiles==1.1.1
 websockets==12.0
 resend==2.10.0
+slowapi==0.1.9
+limits==3.13.0

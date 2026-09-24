@@ -1,5 +1,8 @@
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -80,7 +83,7 @@ def post_system_notification(event_id: str, content: str) -> dict | None:
         response = supabase.table("event_chats").insert(payload).execute()
         return response.data[0] if response.data else None
     except Exception as exc:
-        print(f"[chat_service] Failed to post system notification: {exc}")
+        logger.error(f"Failed to post system notification for event {event_id}: {exc}")
         return None
 
 

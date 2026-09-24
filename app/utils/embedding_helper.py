@@ -1,5 +1,8 @@
 import os
+import logging
 from mixedbread import Mixedbread
+
+logger = logging.getLogger(__name__)
 
 def generate_embedding(text: str) -> list[float] | None:
     try:
@@ -12,5 +15,5 @@ def generate_embedding(text: str) -> list[float] | None:
         )
         return response.data[0].embedding
     except Exception as e:
-        print(f"Embedding generation failed: {e}")
+        logger.error(f"Embedding generation failed: {e}")
         return None

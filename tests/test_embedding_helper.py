@@ -25,13 +25,13 @@ class TestEmbeddingHelper:
         )
 
     @patch("app.utils.embedding_helper.Mixedbread")
-    def test_generate_embedding_failure_returns_none(self, mock_mxbai_class, capsys):
+    def test_generate_embedding_failure_returns_none(self, mock_mxbai_class):
         mock_client = MagicMock()
         mock_client.embed.side_effect = Exception("API Timeout")
         mock_mxbai_class.return_value = mock_client
 
-        result = generate_embedding("fail text")
-
-        assert result is None
-        captured = capsys.readouterr()
-        assert "Embedding generation failed: API Timeout" in captured.out
+        with patch("app.utils.embedding_helper.logger") as mock_logger:
+            result = generate_embedding("fail text")
+            assert result is None
+            mock_logger.error.assert_called_once()
+            assert "API Timeout" in str(mock_logger.error.call_args)
