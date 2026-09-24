@@ -371,21 +371,21 @@ class TestChooseUsername:
 
 class TestUpdateProfileUsernameAndFullName:
     @patch("app.services.profile_service.supabase")
-    def test_update_profile_cannot_change_existing_username(self, mock_sb):
-        curr_chain = MagicMock()
-        curr_chain.select.return_value = curr_chain
-        curr_chain.eq.return_value = curr_chain
-        curr_chain.single.return_value = curr_chain
-        curr_chain.execute.return_value = MagicMock(data={"username": "alice"})
-
-        mock_sb.table.return_value = curr_chain
+    def test_update_profile_leaves_username_as_it_was(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": "u1", "username": "alice", "full_name": "Alice Cooper"}])
 
         from app.services.profile_service import update_profile
-        with pytest.raises(HTTPException) as exc:
-            update_profile("u1", {"username": "bob"})
+        result = update_profile("u1", {"username": "bob", "full_name": "Alice Cooper"})
 
-        assert exc.value.status_code == 400
-        assert "cannot be changed" in exc.value.detail.lower()
+        # Username must not be changed in the database update payload
+        payload = chain.update.call_args[0][0]
+        assert "username" not in payload
+        assert payload["full_name"] == "Alice Cooper"
+        assert result["username"] == "alice"
 
     @patch("app.services.profile_service.supabase")
     def test_update_profile_blank_full_name_raises_400(self, mock_sb):
@@ -394,4 +394,188 @@ class TestUpdateProfileUsernameAndFullName:
             update_profile("u1", {"full_name": "  "})
 
         assert exc.value.status_code == 400
-        assert "full name is required" in exc.value.detail.lower()
+        assert "full name is required" in exc.value.detail.lower()
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_empty_full_name_raises_400(self, mock_sb):
+        from app.services.profile_service import update_profile
+        with pytest.raises(HTTPException) as exc:
+            update_profile("u1", {"full_name": ""})
+
+        assert exc.value.status_code == 400
+        assert "full name is required" in exc.value.detail.lower()
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_invalid_short_full_name_raises_400(self, mock_sb):
+        from app.services.profile_service import update_profile
+        with pytest.raises(HTTPException) as exc:
+            update_profile("u1", {"full_name": "Jo"})
+
+        assert exc.value.status_code == 400
+        assert "between 3 and 50" in exc.value.detail.lower()
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_full_name_without_letters_raises_400(self, mock_sb):
+        from app.services.profile_service import update_profile
+        with pytest.raises(HTTPException) as exc:
+            update_profile("u1", {"full_name": "12345"})
+
+        assert exc.value.status_code == 400
+        assert "at least one letter" in exc.value.detail.lower()
+
+
+class TestTicket121ProfileFields:
+    @patch("app.services.profile_service.supabase")
+    def test_get_profile_returns_banner_and_default_avatar_kind(self, mock_sb):
+        profile_data = {
+            "id": "u1",
+            "username": "alice",
+            "full_name": "Alice Smith",
+            "banner_url": "banner_sunset",
+            "avatar_url": "https://example.com/photo.jpg",
+            "avatar_kind": None,
+            "icon_id": None
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=profile_data)
+
+        from app.services.profile_service import get_profile
+        result = get_profile("u1")
+
+        assert result["username"] == "alice"
+        assert result["full_name"] == "Alice Smith"
+        assert result["banner"] == "banner_sunset"
+        assert result["banner_url"] == "banner_sunset"
+        assert result["avatar_kind"] == "icon"
+
+    @patch("app.services.profile_service.supabase")
+    def test_get_profile_returns_photo_avatar_kind(self, mock_sb):
+        profile_data = {
+            "id": "u1",
+            "username": "bob",
+            "full_name": "Bob Jones",
+            "banner_url": None,
+            "avatar_url": "https://example.com/avatar.jpg",
+            "avatar_kind": "photo",
+            "icon_id": None
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=profile_data)
+
+        from app.services.profile_service import get_profile
+        result = get_profile("u1")
+
+        assert result["banner"] is None
+        assert result["avatar_kind"] == "photo"
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_accepts_banner_and_avatar_kind_photo(self, mock_sb):
+        updated_row = {
+            "id": "u1",
+            "username": "alice",
+            "full_name": "Alice",
+            "banner_url": "banner_mountains",
+            "avatar_kind": "photo",
+            "avatar_url": "https://example.com/my_upload.png"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[updated_row])
+
+        from app.services.profile_service import update_profile
+        result = update_profile("u1", {
+            "banner": "banner_mountains",
+            "avatar_kind": "photo",
+            "avatar_url": "https://example.com/my_upload.png"
+        })
+
+        payload = chain.update.call_args[0][0]
+        assert payload["banner_url"] == "banner_mountains"
+        assert payload["avatar_kind"] == "photo"
+        assert payload["avatar_url"] == "https://example.com/my_upload.png"
+        assert result["banner"] == "banner_mountains"
+        assert result["avatar_kind"] == "photo"
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_accepts_icon_avatar_kind_and_icon_id(self, mock_sb):
+        updated_row = {
+            "id": "u1",
+            "username": "alice",
+            "banner_url": None,
+            "avatar_kind": "icon",
+            "icon_id": "icon_robot"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[updated_row])
+
+        from app.services.profile_service import update_profile
+        result = update_profile("u1", {
+            "avatar_kind": "icon",
+            "icon_id": "icon_robot"
+        })
+
+        payload = chain.update.call_args[0][0]
+        assert payload["avatar_kind"] == "icon"
+        assert payload["icon_id"] == "icon_robot"
+        assert result["avatar_kind"] == "icon"
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_profile_picture_alias(self, mock_sb):
+        updated_row = {
+            "id": "u1",
+            "avatar_kind": "photo"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[updated_row])
+
+        from app.services.profile_service import update_profile
+        update_profile("u1", {"profile_picture": "photo"})
+
+        payload = chain.update.call_args[0][0]
+        assert payload["avatar_kind"] == "photo"
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_invalid_avatar_kind_raises_400(self, mock_sb):
+        from app.services.profile_service import update_profile
+        with pytest.raises(HTTPException) as exc:
+            update_profile("u1", {"avatar_kind": "drawing"})
+
+        assert exc.value.status_code == 400
+        assert "must be either 'photo' or 'icon'" in exc.value.detail
+
+    @patch("app.services.profile_service.supabase")
+    def test_update_profile_stays_valid_without_banner(self, mock_sb):
+        updated_row = {
+            "id": "u1",
+            "full_name": "Alice Updated",
+            "banner_url": None
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[updated_row])
+
+        from app.services.profile_service import update_profile
+        result = update_profile("u1", {"full_name": "Alice Updated", "banner": None})
+
+        payload = chain.update.call_args[0][0]
+        assert payload["banner_url"] is None
+        assert result["full_name"] == "Alice Updated"
+        assert result["banner"] is None

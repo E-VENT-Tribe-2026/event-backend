@@ -107,3 +107,63 @@ class TestProfileRoutes:
             mock_update.assert_called_once_with("u1", {"full_name": "Jane Doe"})
         finally:
             app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("app.api.v1.profile_routes.get_profile")
+    def test_get_my_profile_route_includes_banner_and_avatar_kind(self, mock_get):
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        try:
+            mock_get.return_value = {
+                "id": "u1",
+                "username": "alice",
+                "full_name": "Alice Smith",
+                "banner": "banner_aurora",
+                "banner_url": "banner_aurora",
+                "avatar_kind": "icon",
+                "icon_id": "icon_fox"
+            }
+            response = client.get("/api/profile/me", headers={"Authorization": "Bearer token"})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["username"] == "alice"
+            assert data["banner"] == "banner_aurora"
+            assert data["avatar_kind"] == "icon"
+            assert data["icon_id"] == "icon_fox"
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("app.api.v1.profile_routes.update_profile")
+    def test_put_my_profile_accepts_banner_and_avatar_kind(self, mock_update):
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        try:
+            mock_update.return_value = {
+                "id": "u1",
+                "banner": "banner_beach",
+                "banner_url": "banner_beach",
+                "avatar_kind": "photo",
+                "avatar_url": "https://example.com/me.png"
+            }
+            response = client.put(
+                "/api/profile/me",
+                json={
+                    "banner": "banner_beach",
+                    "avatar_kind": "photo",
+                    "avatar_url": "https://example.com/me.png"
+                },
+                headers={"Authorization": "Bearer token"}
+            )
+            assert response.status_code == 200
+            mock_update.assert_called_once_with("u1", {
+                "banner": "banner_beach",
+                "avatar_kind": "photo",
+                "avatar_url": "https://example.com/me.png"
+            })
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    def test_put_my_profile_unauthenticated(self):
+        # When no user is authenticated, updating own profile is refused
+        response = client.put(
+            "/api/profile/me",
+            json={"full_name": "Stranger"}
+        )
+        assert response.status_code in (401, 403)
