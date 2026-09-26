@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
+from app.schemas.profile_schema import UserSummary
+
 
 class ChatMessageCreate(BaseModel):
     """Payload for sending a new chat message in an event."""
@@ -46,8 +48,12 @@ class ChatMessageResponse(BaseModel):
     id: int = Field(..., description="Auto-incremented message ID.")
     event_id: str = Field(..., description="UUID of the event this message belongs to.")
     sender_id: Optional[str] = Field(None, description="UUID of the user who sent the message.")
-    sender_name: Optional[str] = Field(None, description="Full name of the sender.")
+    sender_name: Optional[str] = Field(
+        None,
+        description='Full name of the sender; "System" for system messages and "Unknown" when the sender has no full name on record.',
+    )
     sender_role: Optional[str] = Field(None, description="Role of the sender: organizer, participant, or system.")
+    sender: Optional[UserSummary] = Field(None, description="Username, full name, and profile picture of the sender; null for system messages.")
     content: str = Field(..., description="Text content of the message.")
     created_at: datetime = Field(..., description="Timestamp when the message was sent (UTC).")
 
@@ -59,6 +65,16 @@ class ChatMessageResponse(BaseModel):
                 "sender_id": "a3bb189e-8bf9-3888-9912-ace4e6543002",
                 "sender_name": "Jane Doe",
                 "sender_role": "organizer",
+                # Mirrors UserSummary (app.schemas.profile_schema).
+                "sender": {
+                    "id": "a3bb189e-8bf9-3888-9912-ace4e6543002",
+                    "username": "jane_doe",
+                    "full_name": "Jane Doe",
+                    "display_name": "jane_doe",
+                    "avatar_kind": "icon",
+                    "icon_id": "icon_fox",
+                    "avatar_url": None
+                },
                 "content": "Hey everyone, can't wait for this event! 🎉",
                 "created_at": "2026-04-22T16:00:00Z"
             }

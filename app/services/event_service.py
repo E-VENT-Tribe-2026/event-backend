@@ -4,7 +4,7 @@ from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
-from app.services.profile_service import get_username
+from app.services.profile_service import get_username, get_user_summaries, build_user_summary
 import logging
 
 logger = logging.getLogger(__name__)
@@ -167,6 +167,62 @@ def get_event(event_id: str):
         )
 
     return response.data
+
+
+def attach_organizers(events: list) -> list:
+    """Add each event's organizer (a UserSummary) under organizer, in place, and return the same list.
+
+    Rows without a created_by key (the search_events RPC may leave it out) get their creator
+    looked up in one query. organizer is None only when the event has no creator on record.
+    Never raises; None and non-dict items are left untouched.
+    """
+    items = [item for item in (events or []) if isinstance(item, dict)]
+    if not items:
+        return events
+
+    # Rows missing the created_by key need their creator looked up separately.
+    missing_ids = list(dict.fromkeys(
+        item.get("id") for item in items if "created_by" not in item and item.get("id")
+    ))
+    backfill = {}
+    if missing_ids:
+        try:
+            response = (
+                supabase.table("events")
+                .select("id, created_by")
+                .in_("id", missing_ids)
+                .execute()
+            )
+            found_rows = response.data or []
+            backfill = {row["id"]: row.get("created_by") for row in found_rows if row.get("id")}
+            not_found = [event_id for event_id in missing_ids if event_id not in backfill]
+            if not_found:
+                logger.warning(f"No event row for event ids: {not_found}")
+        except Exception as e:
+            logger.error(f"Failed to look up creators for events {missing_ids}: {e}", exc_info=True)
+
+    organizer_ids = [
+        item["created_by"] if "created_by" in item else backfill.get(item.get("id"))
+        for item in items
+    ]
+    unique_ids = list(dict.fromkeys(oid for oid in organizer_ids if oid))
+    summaries = {}
+    if unique_ids:
+        try:
+            summaries = get_user_summaries(unique_ids)
+        except Exception as e:
+            logger.error(f"Failed to fetch organizer summaries for {unique_ids}: {e}", exc_info=True)
+
+    for item, oid in zip(items, organizer_ids):
+        # organizer is None only when the event has no creator id at all.
+        if not oid:
+            item["organizer"] = None
+            continue
+        # Fall back to a stub summary when the id has no matching summary row.
+        summary = summaries.get(oid) or build_user_summary(None, oid)
+        # A copy per event, so events never share one mutable summary dict.
+        item["organizer"] = dict(summary)
+    return events
 
 
 def _update_event_side_effects(user_id: str, event_id: str, original_event: dict, updated_event: dict):

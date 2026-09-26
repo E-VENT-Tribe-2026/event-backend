@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.core.dependencies import get_current_user
 from app.services.saved_event_service import *
+from app.services.event_service import attach_organizers
 
 router = APIRouter()
 
@@ -14,4 +15,6 @@ def unsave(event_id: str, user=Depends(get_current_user)):
 
 @router.get("/all")
 def get_saved(user=Depends(get_current_user)):
-    return get_saved_events(user.id)
+    events = get_saved_events(user.id)
+    attach_organizers(events)
+    return events

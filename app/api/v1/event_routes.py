@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from app.core.dependencies import get_current_user
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
@@ -12,9 +14,11 @@ from app.services.event_service import (
     get_all_events_by_user,
     get_max_event_price,
     _update_event_side_effects,
+    attach_organizers,
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # IMPORTANT: Static routes (/me, /my) must be declared BEFORE dynamic routes (/{event_id})
@@ -46,10 +50,11 @@ def get_all_my_events(user=Depends(get_current_user)):
 
     try:
         events_response = get_all_events_by_user(user_id)
+        attach_organizers(events_response.get("data") or [])
         return events_response
 
     except Exception as e:
-        logger.error(f"Internal error in /my-events for user {user_id}: {e}")
+        logger.error(f"Internal error in /my-events for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Could not fetch events for user"
@@ -66,7 +71,9 @@ def get_events(
     date: str | None = None,
     city: str | None = None,
 ):
-    return list_events(page, limit, category, upcoming, search, date, city)
+    result = list_events(page, limit, category, upcoming, search, date, city)
+    attach_organizers(result.get("data") or [])
+    return result
 
 
 @router.post("/")
@@ -97,7 +104,9 @@ def update_existing_event(
 @router.get("/{event_id}")
 def read_event(event_id: str):
     """Get a single event by ID. Public endpoint."""
-    return get_event(event_id)
+    event = get_event(event_id)
+    attach_organizers([event])
+    return event
 
 
 @router.delete("/{event_id}")

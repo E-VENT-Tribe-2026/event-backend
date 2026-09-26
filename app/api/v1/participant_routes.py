@@ -10,7 +10,9 @@ from app.services.participant_service import (
     get_my_events,
     remove_participant,
     _remove_side_effects,
+    _single_profile,
 )
+from app.services.event_service import attach_organizers
 
 router = APIRouter()
 
@@ -76,4 +78,7 @@ def remove_participant_api(
 
 @router.get("/my/events")
 def my_events(user=Depends(get_current_user)):
-    return get_my_events(user.id)
+    rows = get_my_events(user.id)
+    # _single_profile works for any embed shape; the organizer lands on the same event object, so the row keeps its shape.
+    attach_organizers([_single_profile(row.get("events")) for row in rows])
+    return rows

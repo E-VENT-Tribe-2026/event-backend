@@ -41,3 +41,18 @@ class ProfileUpdateRequest(BaseModel):
 class LocationUpdateRequest(BaseModel):
     latitude: float
     longitude: float
+
+
+class UserSummary(BaseModel):
+    """Minimal, consistent way to show a user next to their content (chat messages, participant lists, etc.).
+
+    This is the canonical UserSummary shape; USER_SUMMARY_COLUMNS and
+    build_user_summary (app.services.profile_service) must be kept in sync with it.
+    """
+    id: str
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    display_name: Optional[str] = None
+    avatar_kind: str = "icon"
+    icon_id: Optional[str] = None
+    avatar_url: Optional[str] = None

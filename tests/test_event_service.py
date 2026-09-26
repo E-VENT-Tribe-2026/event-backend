@@ -1,3 +1,4 @@
+import logging
 import pytest
 from unittest.mock import MagicMock, patch, call
 from fastapi import HTTPException
@@ -604,3 +605,339 @@ class TestCancelEventNotifications:
         mock_create_notification.assert_called_once_with(
             "p1", "e1", "event_cancelled", "Event 'Tech Conference 2026' was cancelled by john"
         )
+
+# ──────────────────────────────────────────────
+# attach_organizers
+# ──────────────────────────────────────────────
+
+class TestAttachOrganizers:
+    def _summary(self, uid, username):
+        return {
+            "id": uid,
+            "username": username,
+            "full_name": username.title(),
+            "display_name": username,
+            "avatar_kind": "icon",
+            "icon_id": "icon_fox",
+            "avatar_url": None,
+        }
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_batches_and_dedupes_organizer_ids(self, mock_sb, mock_get_summaries):
+        events = [
+            {"id": "e1", "created_by": "u1"},
+            {"id": "e2", "created_by": "u1"},
+            {"id": "e3", "created_by": "u2"},
+        ]
+        mock_get_summaries.return_value = {
+            "u1": self._summary("u1", "jill5"),
+            "u2": self._summary("u2", "tom9"),
+        }
+
+        from app.services.event_service import attach_organizers
+        attach_organizers(events)
+
+        mock_get_summaries.assert_called_once()
+        called_ids = mock_get_summaries.call_args.args[0]
+        assert sorted(set(called_ids)) == ["u1", "u2"]
+        assert len(list(called_ids)) == 2
+        mock_sb.table.assert_not_called()
+
+        assert events[0]["organizer"] == self._summary("u1", "jill5")
+        assert events[1]["organizer"] == self._summary("u1", "jill5")
+        assert events[2]["organizer"] == self._summary("u2", "tom9")
+        assert events[0]["organizer"] is not events[1]["organizer"]
+
+        # Mutating one event's organizer must not affect the other event
+        # or the mock's underlying summary dict.
+        events[0]["organizer"]["username"] = "changed"
+        assert events[1]["organizer"]["username"] == "jill5"
+        assert mock_get_summaries.return_value["u1"]["username"] == "jill5"
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_mutates_in_place_and_returns_same_list(self, mock_get_summaries):
+        mock_get_summaries.return_value = {"u1": self._summary("u1", "jill5")}
+        events = [{"id": "e1", "created_by": "u1", "title": "Party"}]
+
+        from app.services.event_service import attach_organizers
+        result = attach_organizers(events)
+
+        assert result is events
+        assert events[0]["organizer"] == self._summary("u1", "jill5")
+        assert events[0]["title"] == "Party"
+        assert events[0]["id"] == "e1"
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_skips_none_and_non_dict_items(self, mock_get_summaries):
+        mock_get_summaries.return_value = {"u1": self._summary("u1", "jill5")}
+        events = [{"id": "e1", "created_by": "u1"}, None, "not-a-dict", 42]
+
+        from app.services.event_service import attach_organizers
+        result = attach_organizers(events)
+
+        assert result[1] is None
+        assert result[2] == "not-a-dict"
+        assert result[3] == 42
+        assert result[0]["organizer"] == self._summary("u1", "jill5")
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_empty_input_no_summaries_call_no_supabase_query(self, mock_sb, mock_get_summaries):
+        from app.services.event_service import attach_organizers
+        result = attach_organizers([])
+
+        assert result == []
+        mock_get_summaries.assert_not_called()
+        mock_sb.table.assert_not_called()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_only_none_items_no_summaries_call(self, mock_sb, mock_get_summaries):
+        from app.services.event_service import attach_organizers
+        events = [None, None]
+        attach_organizers(events)
+
+        mock_get_summaries.assert_not_called()
+        mock_sb.table.assert_not_called()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_only_created_by_none_no_summaries_call(self, mock_sb, mock_get_summaries):
+        from app.services.event_service import attach_organizers
+        events = [{"id": "e1", "created_by": None}]
+        attach_organizers(events)
+
+        mock_get_summaries.assert_not_called()
+        mock_sb.table.assert_not_called()
+        assert events[0]["organizer"] is None
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_missing_summary_gets_stub(self, mock_get_summaries):
+        from app.services.profile_service import build_user_summary
+        mock_get_summaries.return_value = {}
+        events = [{"id": "e1", "created_by": "u1"}]
+
+        from app.services.event_service import attach_organizers
+        attach_organizers(events)
+
+        assert events[0]["organizer"] == build_user_summary(None, "u1")
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_d6_backfill_looks_up_missing_created_by(self, mock_get_summaries):
+        from tests._supabase_mock import make_table_router
+        mock_sb, chains = make_table_router()
+        chains["events"].execute.return_value = MagicMock(
+            data=[{"id": "e1", "created_by": "u1"}]
+        )
+        mock_get_summaries.return_value = {"u1": self._summary("u1", "jill5")}
+
+        with patch("app.services.event_service.supabase", mock_sb):
+            from app.services.event_service import attach_organizers
+            events = [{"id": "e1", "title": "No creator key"}]
+            attach_organizers(events)
+
+        chains["events"].select.assert_any_call("id, created_by")
+        chains["events"].in_.assert_any_call("id", ["e1"])
+        assert "created_by" not in events[0]
+        assert events[0]["organizer"] == self._summary("u1", "jill5")
+
+        event_query_count = [c.args[0] for c in mock_sb.table.call_args_list].count("events")
+        assert event_query_count == 1
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_no_events_query_when_all_rows_have_created_by_key(self, mock_get_summaries):
+        from tests._supabase_mock import make_table_router
+        mock_sb, chains = make_table_router()
+        mock_get_summaries.return_value = {"u1": self._summary("u1", "jill5")}
+
+        with patch("app.services.event_service.supabase", mock_sb):
+            from app.services.event_service import attach_organizers
+            events = [{"id": "e1", "created_by": None}, {"id": "e2", "created_by": "u1"}]
+            attach_organizers(events)
+
+        event_query_count = [c.args[0] for c in mock_sb.table.call_args_list].count("events")
+        assert event_query_count == 0
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_d6_backfill_no_row_found_gives_none_organizer(self, mock_get_summaries):
+        from tests._supabase_mock import make_table_router
+        mock_sb, chains = make_table_router()
+        chains["events"].execute.return_value = MagicMock(data=[])
+        mock_get_summaries.return_value = {}
+
+        with patch("app.services.event_service.supabase", mock_sb):
+            from app.services.event_service import attach_organizers
+            events = [{"id": "e1", "title": "No creator key"}]
+            attach_organizers(events)
+
+        assert events[0]["organizer"] is None
+        mock_get_summaries.assert_not_called()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_d6_backfill_query_raises_no_exception_and_others_still_get_summaries(self, mock_get_summaries, caplog):
+        from tests._supabase_mock import make_table_router
+        mock_sb, chains = make_table_router()
+        chains["events"].execute.side_effect = Exception("db down")
+        mock_get_summaries.return_value = {"u2": self._summary("u2", "tom9")}
+
+        with patch("app.services.event_service.supabase", mock_sb):
+            from app.services.event_service import attach_organizers
+            events = [
+                {"id": "e1", "title": "No creator key"},
+                {"id": "e2", "created_by": "u2"},
+            ]
+            with caplog.at_level(logging.ERROR, logger="app.services.event_service"):
+                result = attach_organizers(events)
+
+        assert result[0]["organizer"] is None
+        assert result[1]["organizer"] == self._summary("u2", "tom9")
+        error_records = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert len(error_records) == 1
+        assert error_records[0].exc_info is not None
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_get_user_summaries_raising_gives_stubs_not_exception(self, mock_get_summaries, caplog):
+        from app.services.profile_service import build_user_summary
+        mock_get_summaries.side_effect = Exception("summary service down")
+        events = [{"id": "e1", "created_by": "u1"}]
+
+        from app.services.event_service import attach_organizers
+        with caplog.at_level(logging.ERROR, logger="app.services.event_service"):
+            result = attach_organizers(events)
+
+        assert result[0]["organizer"] == build_user_summary(None, "u1")
+        error_records = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert len(error_records) == 1
+        assert error_records[0].exc_info is not None
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_d6_backfill_warns_when_some_ids_not_found(self, mock_get_summaries, caplog):
+        from tests._supabase_mock import make_table_router
+        mock_sb, chains = make_table_router()
+        chains["events"].execute.return_value = MagicMock(
+            data=[{"id": "e1", "created_by": "u1"}]
+        )
+        mock_get_summaries.return_value = {"u1": self._summary("u1", "jill5")}
+
+        with patch("app.services.event_service.supabase", mock_sb):
+            from app.services.event_service import attach_organizers
+            events = [
+                {"id": "e1", "title": "No creator key"},
+                {"id": "e2", "title": "No creator key either"},
+            ]
+            with caplog.at_level(logging.WARNING, logger="app.services.event_service"):
+                attach_organizers(events)
+
+        warning_records = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(warning_records) == 1
+        assert "e2" in warning_records[0].getMessage()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    def test_d6_backfill_no_warning_when_all_ids_found(self, mock_get_summaries, caplog):
+        from tests._supabase_mock import make_table_router
+        mock_sb, chains = make_table_router()
+        chains["events"].execute.return_value = MagicMock(
+            data=[{"id": "e1", "created_by": "u1"}]
+        )
+        mock_get_summaries.return_value = {"u1": self._summary("u1", "jill5")}
+
+        with patch("app.services.event_service.supabase", mock_sb):
+            from app.services.event_service import attach_organizers
+            events = [{"id": "e1", "title": "No creator key"}]
+            with caplog.at_level(logging.WARNING, logger="app.services.event_service"):
+                attach_organizers(events)
+
+        warning_records = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(warning_records) == 0
+
+
+# ──────────────────────────────────────────────
+# unchanged by attach_organizers
+# ──────────────────────────────────────────────
+
+class TestEventServiceUnchangedByOrganizers:
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_get_event_has_no_organizer_key(self, mock_sb, mock_get_summaries):
+        event = {"id": "e1", "title": "Party"}
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=event)
+
+        from app.services.event_service import get_event
+        result = get_event("e1")
+
+        assert result == event
+        assert "organizer" not in result
+        mock_get_summaries.assert_not_called()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_list_events_standard_filter_has_no_organizer_key(self, mock_sb, mock_get_summaries):
+        rows = [{"id": "e1", "status": "active"}]
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.gte.return_value = chain
+        chain.gt.return_value = chain
+        chain.ilike.return_value = chain
+        chain.order.return_value = chain
+        chain.range.return_value = chain
+        chain.execute.return_value = MagicMock(data=rows)
+
+        from app.services.event_service import list_events
+        result = list_events(page=1, limit=10)
+
+        assert result["data"] == rows
+        assert all("organizer" not in item for item in result["data"])
+        mock_get_summaries.assert_not_called()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.generate_embedding", return_value=[0.1, 0.2])
+    @patch("app.services.event_service.supabase")
+    def test_list_events_semantic_search_has_no_organizer_key(self, mock_sb, mock_embed, mock_get_summaries):
+        from datetime import datetime, timedelta
+        future_date = (datetime.now() + timedelta(days=5)).isoformat()
+
+        rows = [
+            {
+                "id": "e1",
+                "title": "Future Fest",
+                "end_datetime": future_date,
+                "status": "active",
+            }
+        ]
+
+        rpc_mock = MagicMock()
+        mock_sb.rpc.return_value = rpc_mock
+        rpc_mock.execute.return_value = MagicMock(data=rows)
+
+        from app.services.event_service import list_events
+        result = list_events(search="outdoor festival")
+
+        assert len(result["data"]) == 1
+        assert "organizer" not in result["data"][0]
+        mock_get_summaries.assert_not_called()
+
+    @patch("app.services.event_service.get_user_summaries", create=True)
+    @patch("app.services.event_service.supabase")
+    def test_get_all_events_by_user_has_no_organizer_key(self, mock_sb, mock_get_summaries):
+        rows = [{"id": "e1"}, {"id": "e2"}]
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.order.return_value = chain
+        chain.execute.return_value = MagicMock(data=rows)
+
+        from app.services.event_service import get_all_events_by_user
+        result = get_all_events_by_user("u1")
+
+        assert result["data"] == rows
+        assert all("organizer" not in item for item in result["data"])
+        mock_get_summaries.assert_not_called()

@@ -1,9 +1,72 @@
+import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.utils.validators import validate_username, validate_full_name
 
+logger = logging.getLogger(__name__)
+
+
+# Columns needed to build a UserSummary for a user (see build_user_summary below).
+# Keep in sync with app.schemas.profile_schema.UserSummary.
+USER_SUMMARY_COLUMNS = "id, username, full_name, avatar_url, avatar_kind, icon_id"
+
+
+def build_user_summary(profile: dict | None, user_id: str | None = None) -> dict:
+    """Build the minimal, consistent shape used to show a user next to their content.
+
+    Keep in sync with app.schemas.profile_schema.UserSummary.
+    Pass user_id whenever profile may be None or lack an id, since UserSummary.id is required.
+    """
+    profile = profile or {}
+
+    username = str(profile.get("username") or "").strip() or None
+    full_name = profile.get("full_name")
+    # An account without a username is shown by its full name.
+    display_name = username or full_name
+
+    avatar_kind = str(profile.get("avatar_kind") or "").strip().lower()
+    if avatar_kind not in ("photo", "icon"):
+        avatar_kind = "icon"
+
+    return {
+        "id": profile.get("id") or user_id,
+        "username": username,
+        "full_name": full_name,
+        "display_name": display_name,
+        "avatar_kind": avatar_kind,
+        "icon_id": profile.get("icon_id"),
+        "avatar_url": profile.get("avatar_url"),
+    }
+
+
+def get_user_summaries(user_ids) -> dict:
+    """Batch-fetch UserSummary dicts for a list of user ids in a single query."""
+    ids = list(dict.fromkeys(uid for uid in user_ids if uid))
+    if not ids:
+        return {}
+
+    try:
+        response = (
+            supabase.table("profiles")
+            .select(USER_SUMMARY_COLUMNS)
+            .in_("id", ids)
+            .execute()
+        )
+        summaries = {
+            row["id"]: build_user_summary(row)
+            for row in (response.data or [])
+            if row.get("id")
+        }
+        missing = [uid for uid in ids if uid not in summaries]
+        if missing:
+            logger.warning(f"No profile row for user ids: {missing}")
+    except Exception as e:
+        logger.error(f"Failed to fetch user summaries for {ids}: {e}", exc_info=True)
+        summaries = {}
+
+    return {uid: summaries.get(uid) or build_user_summary(None, uid) for uid in ids}
 
 
 def get_profile(user_id: str):
@@ -38,21 +101,23 @@ def get_profile(user_id: str):
 
 
 def get_username(user_id: str) -> str:
-    """Return the user's username from profiles, falling back to 'Someone' if empty."""
+    """Return the user's username, falling back to their full name, then 'Someone'."""
     try:
         result = (
             supabase.table("profiles")
-            .select("username")
+            .select("username, full_name")
             .eq("id", user_id)
             .single()
             .execute()
         )
-        name = result.data.get("username") if result.data else None
-        # if the name is strictly empty or whitespace, treat as missing
-        if name and name.strip():
-            return name.strip()
+        data = result.data or {}
+        # An account without a username is shown by its full name.
+        for name in (data.get("username"), data.get("full_name")):
+            if name and str(name).strip():
+                return str(name).strip()
         return "Someone"
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Username lookup failed for user {user_id}: {e}")
         return "Someone"
 
 
