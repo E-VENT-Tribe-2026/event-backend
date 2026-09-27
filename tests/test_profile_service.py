@@ -191,7 +191,7 @@ class TestSearchProfiles:
         assert result["data"] == rows
         assert result["page"] == 1
         chain.ilike.assert_called_once_with("username", "%alice%")
-        chain.select.assert_called_once_with("id, full_name, avatar_url, bio, visibility")
+        chain.select.assert_called_once_with("id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility")
         chain.range.assert_called_once_with(0, 4)
 
     @patch("app.services.profile_service.supabase")
