@@ -301,7 +301,7 @@ def get_public_profile(user_id: str):
     """
     response = (
         supabase.table("profiles")
-        .select("id, full_name, avatar_url, bio, visibility, created_at, username")
+        .select("id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, created_at, username")
         .eq("id", user_id)
         .single()
         .execute()
@@ -321,6 +321,9 @@ def get_public_profile(user_id: str):
             detail="This profile is private"
         )
 
+    if not profile.get("avatar_kind"):
+        profile["avatar_kind"] = "icon"
+
     return profile
 
 
@@ -331,7 +334,7 @@ def search_profiles(query: str, page: int = 1, limit: int = 10):
 
     response = (
         supabase.table("profiles")
-        .select("id, full_name, avatar_url, bio, visibility")
+        .select("id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility")
         .eq("visibility", "public")
         .ilike("username", f"%{query}%")
         .range(start, end)

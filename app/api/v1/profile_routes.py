@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+import time
+from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from app.core.dependencies import get_current_user
+from app.db.supabase_client import supabase  # now matches the client used elsewhere
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
     LocationUpdateRequest,
@@ -17,7 +19,7 @@ from app.services.profile_service import (
 router = APIRouter()
 
 
-# IMPORTANT: Static routes (/me, /location, /search, /choose-username, /username) must be declared BEFORE
+# IMPORTANT: Static routes (/me, /location, /search, /choose-username, /username, /upload-photo) must be declared BEFORE
 # the dynamic route (/{user_id}) to prevent routing conflicts.
 
 @router.post("/choose-username")
@@ -71,6 +73,37 @@ def update_my_location(
     """Update the location of the authenticated user."""
     return update_location(user.id, data.latitude, data.longitude)
 
+
+@router.post("/upload-photo")
+async def upload_profile_photo(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user)
+):
+    """Upload profile photo to Supabase storage and update profile avatar_url."""
+    try:
+        user_id = user.id
+        file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
+        file_path = f"{user_id}/avatar-{int(time.time())}.{file_ext}"
+
+        file_bytes = await file.read()
+
+        res = supabase.storage.from_("avatars").upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"content_type": file.content_type, "upsert": "true"}
+        )
+
+        public_url_res = supabase.storage.from_("avatars").get_public_url(file_path)
+        public_url = public_url_res if isinstance(public_url_res, str) else public_url_res.get("publicUrl")
+
+        if not public_url:
+            raise HTTPException(status_code=500, detail="Failed to generate public URL for photo.")
+
+        update_profile(user_id, {"avatar_url": public_url})
+
+        return {"avatar_url": public_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/search")
 def search_public_profiles(
