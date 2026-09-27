@@ -1,7 +1,8 @@
 import time
+import mimetypes
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from app.core.dependencies import get_current_user
-from app.db.supabase_client import supabase  # now matches the client used elsewhere
+from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
     LocationUpdateRequest,
@@ -17,6 +18,14 @@ from app.services.profile_service import (
 )
 
 router = APIRouter()
+
+# Allowed avatar formats, matched to the Supabase "avatars" bucket's MIME allowlist.
+ALLOWED_AVATAR_EXTENSIONS = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
 
 
 # IMPORTANT: Static routes (/me, /location, /search, /choose-username, /username, /upload-photo) must be declared BEFORE
@@ -73,7 +82,6 @@ def update_my_location(
     """Update the location of the authenticated user."""
     return update_location(user.id, data.latitude, data.longitude)
 
-
 @router.post("/upload-photo")
 async def upload_profile_photo(
     file: UploadFile = File(...),
@@ -82,15 +90,23 @@ async def upload_profile_photo(
     """Upload profile photo to Supabase storage and update profile avatar_url."""
     try:
         user_id = user.id
-        file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
-        file_path = f"{user_id}/avatar-{int(time.time())}.{file_ext}"
 
+        file_ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else ""
+        content_type = ALLOWED_AVATAR_EXTENSIONS.get(file_ext)
+
+        if not content_type:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file format. Please upload a JPG, PNG, or WEBP image."
+            )
+
+        file_path = f"{user_id}/avatar-{int(time.time())}.{file_ext}"
         file_bytes = await file.read()
 
         res = supabase.storage.from_("avatars").upload(
             path=file_path,
             file=file_bytes,
-            file_options={"content_type": file.content_type, "upsert": "true"}
+            file_options={"content_type": content_type, "upsert": "true"}
         )
 
         public_url_res = supabase.storage.from_("avatars").get_public_url(file_path)
@@ -102,6 +118,8 @@ async def upload_profile_photo(
         update_profile(user_id, {"avatar_url": public_url})
 
         return {"avatar_url": public_url}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
