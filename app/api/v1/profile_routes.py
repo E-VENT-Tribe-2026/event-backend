@@ -106,7 +106,7 @@ async def upload_profile_photo(
         res = supabase.storage.from_("avatars").upload(
             path=file_path,
             file=file_bytes,
-            file_options={"content_type": content_type, "upsert": "true"}
+            file_options={"content-type": content_type, "upsert": "true"}
         )
 
         public_url_res = supabase.storage.from_("avatars").get_public_url(file_path)
