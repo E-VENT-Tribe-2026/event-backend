@@ -17,6 +17,7 @@ class ProfileResponse(BaseModel):
     visibility: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    role: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 
