@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+from app.schemas.profile_schema import UserSummary
 
 
 class NotificationResponse(BaseModel):
@@ -11,6 +12,8 @@ class NotificationResponse(BaseModel):
     message: str
     is_read: bool
     created_at: datetime
+    related_user_id: Optional[str] = None
+    related_user: Optional[UserSummary] = None
 
 
 class NotificationUpdateRequest(BaseModel):

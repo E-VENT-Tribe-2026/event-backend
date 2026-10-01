@@ -1,5 +1,6 @@
 import time
 import mimetypes
+from uuid import UUID
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from app.core.dependencies import get_current_user
 from app.db.supabase_client import supabase
@@ -8,11 +9,11 @@ from app.schemas.profile_schema import (
     LocationUpdateRequest,
 )
 from app.schemas.auth_schema import ChooseUsernameRequest
+from app.services.public_profile_service import build_public_profile
 from app.services.profile_service import (
     get_profile,
     update_profile,
     update_location,
-    get_public_profile,
     search_profiles,
     choose_username,
 )
@@ -126,14 +127,15 @@ async def upload_profile_photo(
 @router.get("/search")
 def search_public_profiles(
     q: str = Query(..., min_length=1, description="Search query for username"),
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, le=50),
+    page: int = Query(1, ge=1, le=10000),
+    limit: int = Query(10, ge=1, le=50),
+    user=Depends(get_current_user),
 ):
-    """Search public profiles by username. Public endpoint."""
-    return search_profiles(q, page, limit)
+    """Search public profiles by username. Requires authentication."""
+    return search_profiles(q, page, limit, user.id)
 
 
 @router.get("/{user_id}")
-def read_public_profile(user_id: str):
-    """Get a public profile by user ID."""
-    return get_public_profile(user_id)
+def read_public_profile(user_id: UUID, user=Depends(get_current_user)):
+    """Get a profile by user ID, including events and friendship state."""
+    return build_public_profile(str(user_id), user.id)
