@@ -6,6 +6,8 @@ from app.core.dependencies import get_current_user
 
 client = TestClient(app)
 
+PROFILE_UUID = "123e4567-e89b-12d3-a456-426614174000"
+
 
 class MockUser:
     id = "u1"
@@ -166,4 +168,79 @@ class TestProfileRoutes:
             "/api/profile/me",
             json={"full_name": "Stranger"}
         )
+        assert response.status_code in (401, 403)
+
+
+class TestProfileSearchAndPublicRoutes:
+    @patch("app.api.v1.profile_routes.search_profiles")
+    def test_search_passes_viewer_id(self, mock_search):
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        try:
+            mock_search.return_value = {"page": 2, "limit": 5, "has_more": False, "data": []}
+            response = client.get(
+                "/api/profile/search?q=alice&page=2&limit=5",
+                headers={"Authorization": "Bearer token"},
+            )
+            assert response.status_code == 200
+            assert response.json()["has_more"] is False
+            mock_search.assert_called_once_with("alice", 2, 5, "u1")
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @pytest.mark.parametrize("params", ["limit=0", "limit=-1", "limit=51", "page=10001"])
+    @patch("app.api.v1.profile_routes.search_profiles")
+    def test_search_rejects_out_of_range_pagination(self, mock_search, params):
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        try:
+            response = client.get(
+                f"/api/profile/search?q=alice&{params}",
+                headers={"Authorization": "Bearer token"},
+            )
+            assert response.status_code == 422
+            mock_search.assert_not_called()
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("app.api.v1.profile_routes.build_public_profile")
+    def test_get_public_profile_passes_viewer_id(self, mock_build):
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        try:
+            mock_build.return_value = {
+                "id": PROFILE_UUID,
+                "username": "bob",
+                "events": {
+                    "organized": {"upcoming": [], "past": []},
+                    "joined": {"upcoming": [], "past": []},
+                },
+                "friendship": {"status": "none", "request_id": None},
+            }
+            response = client.get(
+                f"/api/profile/{PROFILE_UUID}",
+                headers={"Authorization": "Bearer token"},
+            )
+            assert response.status_code == 200
+            assert response.json()["id"] == PROFILE_UUID
+            mock_build.assert_called_once_with(PROFILE_UUID, "u1")
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("app.api.v1.profile_routes.build_public_profile")
+    def test_get_public_profile_non_uuid_returns_422(self, mock_build):
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        try:
+            response = client.get(
+                "/api/profile/not-a-uuid",
+                headers={"Authorization": "Bearer token"},
+            )
+            assert response.status_code == 422
+            mock_build.assert_not_called()
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    def test_search_requires_authentication(self):
+        response = client.get("/api/profile/search?q=alice")
+        assert response.status_code in (401, 403)
+
+    def test_get_public_profile_requires_authentication(self):
+        response = client.get(f"/api/profile/{PROFILE_UUID}")
         assert response.status_code in (401, 403)

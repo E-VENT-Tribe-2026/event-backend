@@ -11,7 +11,8 @@ def make_table_router():
         # chains["events"] before the service ever calls .table("events").
         def __missing__(self, name):
             chain = MagicMock()
-            for method in ("select", "eq", "in_", "order", "range", "single", "insert", "update", "delete"):
+            for method in ("select", "eq", "in_", "order", "range", "single", "insert", "update", "delete",
+                           "or_", "neq", "ilike", "gt", "gte", "lt", "lte", "is_", "limit", "not_"):
                 getattr(chain, method).return_value = chain
             self[name] = chain
             return chain
