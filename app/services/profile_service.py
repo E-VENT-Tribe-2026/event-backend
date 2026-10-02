@@ -293,33 +293,39 @@ def update_location(user_id: str, latitude: float, longitude: float):
     return response.data[0]
 
 
+PUBLIC_PROFILE_COLUMNS = (
+    "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, "
+    "created_at, username, banner_url, interests"
+)
+SEARCH_COLUMNS = "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, username"
+
+
+def escape_like(value: str) -> str:
+    """Escape LIKE wildcards so user input is matched literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def get_public_profile(user_id: str):
     """
-    Get a user's public profile.
-    Only returns data if the profile visibility is 'public'.
-    Private profiles return a 403 to avoid leaking existence.
+    Get a user's profile limited to the public columns (allow-list).
+    Raises 404 when the profile does not exist. Visibility, events and
+    friendship state are applied by app.services.public_profile_service.
     """
     response = (
         supabase.table("profiles")
-        .select("id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, created_at, username")
+        .select(PUBLIC_PROFILE_COLUMNS)
         .eq("id", user_id)
-        .single()
+        .limit(1)
         .execute()
     )
 
-    if response.data is None:
+    if not response.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Profile not found"
         )
 
-    profile = response.data
-
-    if profile.get("visibility") != "public":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This profile is private"
-        )
+    profile = response.data[0]
 
     if not profile.get("avatar_kind"):
         profile["avatar_kind"] = "icon"
@@ -327,22 +333,34 @@ def get_public_profile(user_id: str):
     return profile
 
 
-def search_profiles(query: str, page: int = 1, limit: int = 10):
-    """Search public profiles by username. Returns only public profiles."""
-    start = (page - 1) * limit
-    end = start + limit - 1
+def search_profiles(query: str, page: int, limit: int, viewer_id: str):
+    """
+    Search public profiles by username, always excluding the viewer.
+    Returns only public profiles. PostgREST treats '*' as '%' in like/ilike
+    and usernames never contain '*', so '*' is stripped from the query; a
+    query that is empty afterwards returns an empty page without querying.
+    """
+    query = query.replace("*", "")
+    if not query:
+        return {"page": page, "limit": limit, "has_more": False, "data": []}
 
-    response = (
+    start = (page - 1) * limit
+
+    q = (
         supabase.table("profiles")
-        .select("id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility")
+        .select(SEARCH_COLUMNS)
         .eq("visibility", "public")
-        .ilike("username", f"%{query}%")
-        .range(start, end)
-        .execute()
+        .ilike("username", f"%{escape_like(query)}%")
+        .neq("id", viewer_id)
     )
 
+    # Fetch one extra row to learn whether another page exists.
+    response = q.order("username").order("id").range(start, start + limit).execute()
+
+    rows = response.data or []
     return {
         "page": page,
         "limit": limit,
-        "data": response.data
+        "has_more": len(rows) > limit,
+        "data": rows[:limit]
     }

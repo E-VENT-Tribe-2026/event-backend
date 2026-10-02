@@ -9,6 +9,7 @@ from app.api.v1 import (
     recommendation_routes,
     chat_routes,
     reminder_routes,
+    friendship_routes,
     admin_routes,
 )
 
@@ -78,4 +79,10 @@ api_router.include_router(
     reminder_routes.router,
     prefix="/reminders",
     tags=["Reminders"]
+)
+
+api_router.include_router(
+    friendship_routes.router,
+    prefix="/friends",
+    tags=["Friends"]
 )

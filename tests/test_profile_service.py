@@ -1,6 +1,6 @@
 import logging
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 from fastapi import HTTPException
 
 
@@ -127,102 +127,306 @@ class TestUpdateLocation:
         assert exc.value.status_code == 400
 
 
+PUBLIC_COLUMNS = (
+    "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, "
+    "created_at, username, banner_url, interests"
+)
+SEARCH_COLS = "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, username"
+EMPTY_EVENTS = {
+    "organized": {"upcoming": [], "past": []},
+    "joined": {"upcoming": [], "past": []},
+}
+
+
+def _profile_chain(data):
+    chain = MagicMock()
+    for name in ("select", "eq", "limit"):
+        getattr(chain, name).return_value = chain
+    chain.execute.return_value = MagicMock(data=data)
+    return chain
+
+
 class TestGetPublicProfile:
     @patch("app.services.profile_service.supabase")
-    def test_returns_public_profile(self, mock_sb):
-        profile = {"id": "u1", "full_name": "Alice", "visibility": "public"}
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.return_value = MagicMock(data=profile)
+    def test_returns_profile_row(self, mock_sb):
+        profile = {"id": "u1", "full_name": "Alice", "visibility": "public", "avatar_kind": "photo"}
+        mock_sb.table.return_value = _profile_chain([dict(profile)])
 
         from app.services.profile_service import get_public_profile
         result = get_public_profile("u1")
 
         assert result == profile
+        assert "events" not in result
+        assert "friendship" not in result
 
     @patch("app.services.profile_service.supabase")
-    def test_raises_403_for_private_profile(self, mock_sb):
-        profile = {"id": "u1", "full_name": "Bob", "visibility": "private"}
-        chain = MagicMock()
+    def test_select_uses_public_columns_only(self, mock_sb):
+        chain = _profile_chain([{"id": "u1", "visibility": "public"}])
         mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.return_value = MagicMock(data=profile)
+
+        from app.services.profile_service import get_public_profile, PUBLIC_PROFILE_COLUMNS
+        get_public_profile("u1")
+
+        assert PUBLIC_PROFILE_COLUMNS == PUBLIC_COLUMNS
+        mock_sb.table.assert_called_once_with("profiles")
+        chain.select.assert_called_once_with(PUBLIC_COLUMNS)
+        chain.eq.assert_called_once_with("id", "u1")
+        chain.limit.assert_called_once_with(1)
+        cols = [c.strip() for c in PUBLIC_COLUMNS.split(",")]
+        for forbidden in (
+            "phone", "dob", "gender", "role", "is_verified", "tier_id",
+            "latitude", "longitude", "interest_embedding", "email",
+        ):
+            assert forbidden not in cols
+
+    @patch("app.services.profile_service.supabase")
+    def test_private_profile_is_returned_without_403(self, mock_sb):
+        mock_sb.table.return_value = _profile_chain([{"id": "u1", "visibility": "private"}])
 
         from app.services.profile_service import get_public_profile
-        with pytest.raises(HTTPException) as exc:
-            get_public_profile("u1")
-        assert exc.value.status_code == 403
+        assert get_public_profile("u1")["visibility"] == "private"
+
+    @patch("app.services.profile_service.supabase")
+    def test_avatar_kind_defaults_to_icon(self, mock_sb):
+        mock_sb.table.return_value = _profile_chain([{"id": "u1", "avatar_kind": None}])
+
+        from app.services.profile_service import get_public_profile
+        assert get_public_profile("u1")["avatar_kind"] == "icon"
+
+    @patch("app.services.profile_service.supabase")
+    def test_avatar_kind_defaults_to_icon_when_empty_string(self, mock_sb):
+        mock_sb.table.return_value = _profile_chain([{"id": "u1", "avatar_kind": ""}])
+
+        from app.services.profile_service import get_public_profile
+        assert get_public_profile("u1")["avatar_kind"] == "icon"
 
     @patch("app.services.profile_service.supabase")
     def test_raises_404_when_not_found(self, mock_sb):
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.return_value = MagicMock(data=None)
+        mock_sb.table.return_value = _profile_chain([])
 
         from app.services.profile_service import get_public_profile
         with pytest.raises(HTTPException) as exc:
             get_public_profile("ghost")
         assert exc.value.status_code == 404
+        assert exc.value.detail == "Profile not found"
+
+
+class TestBuildPublicProfile:
+    @pytest.fixture
+    def mocks(self):
+        with patch("app.services.public_profile_service.get_public_profile") as profile, \
+             patch("app.services.public_profile_service.get_profile_events") as events, \
+             patch("app.services.public_profile_service.get_friendship_state") as state:
+            events.return_value = EMPTY_EVENTS
+            state.return_value = {"status": "none", "request_id": None}
+            yield profile, events, state
+
+    @pytest.mark.parametrize("fstatus", ["none", "self", "friends", "request_sent", "request_received"])
+    def test_public_profile_returned_for_any_status(self, mocks, fstatus):
+        profile, events, state = mocks
+        profile.return_value = {"id": "u1", "visibility": "public"}
+        state.return_value = {"status": fstatus, "request_id": None}
+
+        from app.services.public_profile_service import build_public_profile
+        result = build_public_profile("u1", "viewer")
+
+        assert result["id"] == "u1"
+        assert result["events"] == EMPTY_EVENTS
+        assert result["friendship"] == {"status": fstatus, "request_id": None}
+        events.assert_called_once_with("u1")
+
+    def test_friendship_state_called_with_viewer_then_user(self, mocks):
+        profile, _events, state = mocks
+        profile.return_value = {"id": "u1", "visibility": "public"}
+
+        from app.services.public_profile_service import build_public_profile
+        build_public_profile("u1", "viewer")
+
+        profile.assert_called_once_with("u1")
+        state.assert_called_once_with("viewer", "u1")
+
+    def test_private_profile_forbidden_for_stranger(self, mocks):
+        profile, events, _state = mocks
+        profile.return_value = {"id": "u1", "visibility": "private"}
+
+        from app.services.public_profile_service import build_public_profile
+        with pytest.raises(HTTPException) as exc:
+            build_public_profile("u1", "viewer")
+
+        assert exc.value.status_code == 403
+        assert exc.value.detail == "This profile is private"
+        events.assert_not_called()
+
+    @pytest.mark.parametrize("fstatus", ["self", "friends", "request_sent", "request_received"])
+    def test_private_profile_visible_with_relationship(self, mocks, fstatus):
+        profile, events, state = mocks
+        profile.return_value = {"id": "u1", "visibility": "private"}
+        state.return_value = {"status": fstatus, "request_id": 3}
+
+        from app.services.public_profile_service import build_public_profile
+        result = build_public_profile("u1", "viewer")
+
+        assert result["friendship"]["status"] == fstatus
+        assert result["events"] == EMPTY_EVENTS
+        events.assert_called_once_with("u1")
+
+    def test_not_found_propagates(self, mocks):
+        profile, events, _state = mocks
+        profile.side_effect = HTTPException(status_code=404, detail="Profile not found")
+
+        from app.services.public_profile_service import build_public_profile
+        with pytest.raises(HTTPException) as exc:
+            build_public_profile("ghost", "viewer")
+
+        assert exc.value.status_code == 404
+        events.assert_not_called()
+
+
+def _search_chain(data):
+    chain = MagicMock()
+    for name in ("select", "eq", "neq", "ilike", "order", "range"):
+        getattr(chain, name).return_value = chain
+    chain.execute.return_value = MagicMock(data=data)
+    return chain
+
+
+class TestEscapeLike:
+    def test_plain_value_unchanged(self):
+        from app.services.profile_service import escape_like
+        assert escape_like("alice") == "alice"
+
+    def test_escapes_percent_underscore_and_backslash(self):
+        from app.services.profile_service import escape_like
+        assert escape_like("a_b%c\\d") == "a\\_b\\%c\\\\d"
+
+    def test_backslash_escaped_first(self):
+        from app.services.profile_service import escape_like
+        assert escape_like("\\%") == "\\\\\\%"
 
 
 class TestSearchProfiles:
     @patch("app.services.profile_service.supabase")
     def test_returns_matching_profiles(self, mock_sb):
         rows = [{"id": "u1", "full_name": "Alice"}]
-        chain = MagicMock()
+        chain = _search_chain(rows)
         mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.ilike.return_value = chain
-        chain.range.return_value = chain
-        chain.execute.return_value = MagicMock(data=rows)
 
         from app.services.profile_service import search_profiles
-        result = search_profiles("alice", page=1, limit=5)
+        result = search_profiles("alice", 1, 5, "viewer-1")
 
         assert result["data"] == rows
         assert result["page"] == 1
+        assert result["limit"] == 5
+        assert result["has_more"] is False
+        assert set(result.keys()) == {"page", "limit", "has_more", "data"}
+        mock_sb.table.assert_called_with("profiles")
         chain.ilike.assert_called_once_with("username", "%alice%")
-        chain.select.assert_called_once_with("id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility")
-        chain.range.assert_called_once_with(0, 4)
+        chain.select.assert_called_once_with(SEARCH_COLS)
+        chain.range.assert_called_once_with(0, 5)
+
+    def test_search_columns_constant(self):
+        from app.services.profile_service import SEARCH_COLUMNS
+        assert SEARCH_COLUMNS == SEARCH_COLS
 
     @patch("app.services.profile_service.supabase")
     def test_searches_only_public_profiles(self, mock_sb):
-        chain = MagicMock()
+        chain = _search_chain([])
         mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.ilike.return_value = chain
-        chain.range.return_value = chain
-        chain.execute.return_value = MagicMock(data=[])
 
         from app.services.profile_service import search_profiles
-        search_profiles("Bob")
+        search_profiles("Bob", 1, 10, "viewer-1")
 
         chain.eq.assert_any_call("visibility", "public")
 
     @patch("app.services.profile_service.supabase")
     def test_search_passes_mixed_case_query_unchanged(self, mock_sb):
-        chain = MagicMock()
+        chain = _search_chain([])
         mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.ilike.return_value = chain
-        chain.range.return_value = chain
-        chain.execute.return_value = MagicMock(data=[])
 
         from app.services.profile_service import search_profiles
-        search_profiles("JoHn_4")
+        search_profiles("JoHn4", 1, 10, "viewer-1")
 
-        chain.ilike.assert_called_once_with("username", "%JoHn_4%")
+        chain.ilike.assert_called_once_with("username", "%JoHn4%")
+
+    @patch("app.services.profile_service.supabase")
+    def test_search_escapes_like_wildcards(self, mock_sb):
+        chain = _search_chain([])
+        mock_sb.table.return_value = chain
+
+        from app.services.profile_service import search_profiles
+        search_profiles("a_b%c\\d", 1, 10, "viewer-1")
+
+        chain.ilike.assert_called_once_with("username", "%a\\_b\\%c\\\\d%")
+
+    @patch("app.services.profile_service.supabase")
+    def test_excludes_viewer(self, mock_sb):
+        chain = _search_chain([])
+        mock_sb.table.return_value = chain
+
+        from app.services.profile_service import search_profiles
+        search_profiles("alice", 1, 10, "viewer-1")
+
+        chain.neq.assert_called_once_with("id", "viewer-1")
+
+    @patch("app.services.profile_service.supabase")
+    def test_search_strips_asterisk_wildcards(self, mock_sb):
+        chain = _search_chain([])
+        mock_sb.table.return_value = chain
+
+        from app.services.profile_service import search_profiles
+        search_profiles("a*b", 1, 10, "viewer-1")
+
+        chain.ilike.assert_called_once_with("username", "%ab%")
+
+    @patch("app.services.profile_service.supabase")
+    def test_only_asterisks_returns_empty_without_query(self, mock_sb):
+        from app.services.profile_service import search_profiles
+        result = search_profiles("***", 2, 5, "viewer-1")
+
+        assert result == {"page": 2, "limit": 5, "has_more": False, "data": []}
+        mock_sb.table.assert_not_called()
+
+    @patch("app.services.profile_service.supabase")
+    def test_orders_by_username_then_id(self, mock_sb):
+        chain = _search_chain([])
+        mock_sb.table.return_value = chain
+
+        from app.services.profile_service import search_profiles
+        search_profiles("alice", 1, 10, "viewer-1")
+
+        assert chain.order.call_args_list == [call("username"), call("id")]
+
+    @patch("app.services.profile_service.supabase")
+    def test_range_for_later_page(self, mock_sb):
+        chain = _search_chain([])
+        mock_sb.table.return_value = chain
+
+        from app.services.profile_service import search_profiles
+        search_profiles("alice", 3, 5, "viewer-1")
+
+        chain.range.assert_called_once_with(10, 15)
+
+    @patch("app.services.profile_service.supabase")
+    def test_has_more_true_and_data_trimmed(self, mock_sb):
+        rows = [{"id": f"u{i}"} for i in range(6)]
+        mock_sb.table.return_value = _search_chain(rows)
+
+        from app.services.profile_service import search_profiles
+        result = search_profiles("alice", 1, 5, "viewer-1")
+
+        assert result["has_more"] is True
+        assert result["data"] == rows[:5]
+
+    @patch("app.services.profile_service.supabase")
+    def test_has_more_false_when_exactly_limit_rows(self, mock_sb):
+        rows = [{"id": f"u{i}"} for i in range(5)]
+        mock_sb.table.return_value = _search_chain(rows)
+
+        from app.services.profile_service import search_profiles
+        result = search_profiles("alice", 1, 5, "viewer-1")
+
+        assert result["has_more"] is False
+        assert result["data"] == rows
 
 
 class TestGetUsername:

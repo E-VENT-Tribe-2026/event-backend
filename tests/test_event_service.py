@@ -941,3 +941,207 @@ class TestEventServiceUnchangedByOrganizers:
         assert result["data"] == rows
         assert all("organizer" not in item for item in result["data"])
         mock_get_summaries.assert_not_called()
+
+
+# ──────────────────────────────────────────────
+# get_profile_events
+# ──────────────────────────────────────────────
+
+class TestGetProfileEvents:
+    PAST = "2000-01-01T10:00:00+00:00"
+    FUTURE = "2999-01-01T10:00:00+00:00"
+
+    def _ev(self, id_, start, created_by="other", status="active"):
+        return {
+            "id": id_,
+            "title": f"t{id_}",
+            "status": status,
+            "start_datetime": start,
+            "created_by": created_by,
+        }
+
+    def _setup(self, mock_sb, organized, joined_rows):
+        events_chain = MagicMock()
+        events_chain.select.return_value = events_chain
+        events_chain.eq.return_value = events_chain
+        events_chain.execute.return_value = MagicMock(data=organized)
+
+        part_chain = MagicMock()
+        part_chain.select.return_value = part_chain
+        part_chain.eq.return_value = part_chain
+        part_chain.execute.return_value = MagicMock(data=joined_rows)
+
+        chains = {"events": events_chain, "event_participants": part_chain}
+        mock_sb.table.side_effect = lambda name: chains[name]
+        return events_chain, part_chain
+
+    @patch("app.services.event_service.supabase")
+    def test_queries_organized_and_joined(self, mock_sb):
+        events_chain, part_chain = self._setup(mock_sb, [], [])
+
+        from app.services.event_service import get_profile_events, PROFILE_EVENT_COLUMNS
+        get_profile_events("u1")
+
+        events_chain.select.assert_called_once_with(PROFILE_EVENT_COLUMNS)
+        events_chain.eq.assert_called_once_with("created_by", "u1")
+        part_chain.select.assert_called_once_with(f"event_id, events({PROFILE_EVENT_COLUMNS})")
+        assert part_chain.eq.call_args_list == [call("user_id", "u1"), call("status", "going")]
+
+    @patch("app.services.event_service.supabase")
+    def test_list_events_and_profile_events_share_columns_constant(self, mock_sb):
+        events_chain, _ = self._setup(mock_sb, [], [])
+        for name in ("gte", "order", "range"):
+            getattr(events_chain, name).return_value = events_chain
+
+        from app.services.event_service import (
+            get_profile_events, list_events, PROFILE_EVENT_COLUMNS,
+        )
+        get_profile_events("u1")
+        events_chain.select.assert_called_once_with(PROFILE_EVENT_COLUMNS)
+
+        events_chain.select.reset_mock()
+        list_events()
+        events_chain.select.assert_called_once_with(PROFILE_EVENT_COLUMNS)
+
+    @patch("app.services.event_service.supabase")
+    def test_result_has_exact_shape_when_empty(self, mock_sb):
+        self._setup(mock_sb, None, None)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert result == {
+            "organized": {"upcoming": [], "past": []},
+            "joined": {"upcoming": [], "past": []},
+        }
+
+    @patch("app.services.event_service.supabase")
+    def test_cancelled_events_dropped_from_both(self, mock_sb):
+        organized = [
+            self._ev(1, self.FUTURE, "u1"),
+            self._ev(2, self.FUTURE, "u1", status="cancelled"),
+        ]
+        joined = [
+            {"event_id": 3, "events": self._ev(3, self.FUTURE)},
+            {"event_id": 4, "events": self._ev(4, self.PAST, status="cancelled")},
+        ]
+        self._setup(mock_sb, organized, joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["organized"]["upcoming"]] == [1]
+        assert result["organized"]["past"] == []
+        assert [e["id"] for e in result["joined"]["upcoming"]] == [3]
+        assert result["joined"]["past"] == []
+
+    @patch("app.services.event_service.supabase")
+    def test_joined_drops_own_events_and_null_events(self, mock_sb):
+        joined = [
+            {"event_id": 1, "events": self._ev(1, self.FUTURE, "u1")},
+            {"event_id": 2, "events": None},
+            {"event_id": 3, "events": self._ev(3, self.FUTURE, "someone")},
+        ]
+        self._setup(mock_sb, [], joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["joined"]["upcoming"]] == [3]
+        assert result["joined"]["past"] == []
+
+    @patch("app.services.event_service.supabase")
+    def test_upcoming_ascending_and_past_descending(self, mock_sb):
+        organized = [
+            self._ev(1, "2999-03-01T10:00:00+00:00", "u1"),
+            self._ev(2, "2999-01-01T10:00:00+00:00", "u1"),
+            self._ev(3, "2999-02-01T10:00:00+00:00", "u1"),
+            self._ev(4, "2000-01-01T10:00:00+00:00", "u1"),
+            self._ev(5, "2000-03-01T10:00:00+00:00", "u1"),
+            self._ev(6, "2000-02-01T10:00:00+00:00", "u1"),
+        ]
+        self._setup(mock_sb, organized, [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["organized"]["upcoming"]] == [2, 3, 1]
+        assert [e["id"] for e in result["organized"]["past"]] == [5, 6, 4]
+
+    @patch("app.services.event_service.supabase")
+    def test_joined_split_and_sort(self, mock_sb):
+        joined = [
+            {"event_id": 1, "events": self._ev(1, "2999-02-01T10:00:00+00:00")},
+            {"event_id": 2, "events": self._ev(2, "2999-01-01T10:00:00+00:00")},
+            {"event_id": 3, "events": self._ev(3, "2000-01-01T10:00:00+00:00")},
+            {"event_id": 4, "events": self._ev(4, "2000-02-01T10:00:00+00:00")},
+        ]
+        self._setup(mock_sb, [], joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["joined"]["upcoming"]] == [2, 1]
+        assert [e["id"] for e in result["joined"]["past"]] == [4, 3]
+
+    @patch("app.services.event_service.supabase")
+    def test_missing_start_goes_to_past_last(self, mock_sb):
+        organized = [
+            self._ev(1, None, "u1"),
+            self._ev(2, self.PAST, "u1"),
+            self._ev(3, "2000-06-01T10:00:00+00:00", "u1"),
+        ]
+        self._setup(mock_sb, organized, [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert result["organized"]["upcoming"] == []
+        assert [e["id"] for e in result["organized"]["past"]] == [3, 2, 1]
+
+    @patch("app.services.event_service.supabase")
+    def test_z_suffix_and_naive_timestamps_handled(self, mock_sb):
+        organized = [
+            self._ev(1, "2999-01-01T10:00:00Z", "u1"),
+            self._ev(2, "2000-01-01T10:00:00Z", "u1"),
+            self._ev(3, "2999-01-01T10:00:00", "u1"),
+            self._ev(4, "2000-01-01T10:00:00", "u1"),
+        ]
+        self._setup(mock_sb, organized, [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert {e["id"] for e in result["organized"]["upcoming"]} == {1, 3}
+        assert {e["id"] for e in result["organized"]["past"]} == {2, 4}
+
+    @patch("app.services.event_service.supabase")
+    def test_each_group_capped_at_50(self, mock_sb):
+        organized = [self._ev(i, f"2999-01-01T10:{i % 60:02d}:00+00:00", "u1") for i in range(60)]
+        organized += [self._ev(100 + i, f"2000-01-01T10:{i % 60:02d}:00+00:00", "u1") for i in range(60)]
+        joined = [
+            {"event_id": 200 + i, "events": self._ev(200 + i, self.FUTURE)} for i in range(55)
+        ]
+        joined += [
+            {"event_id": 300 + i, "events": self._ev(300 + i, self.PAST)} for i in range(55)
+        ]
+        self._setup(mock_sb, organized, joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert len(result["organized"]["upcoming"]) == 50
+        assert len(result["organized"]["past"]) == 50
+        assert len(result["joined"]["upcoming"]) == 50
+        assert len(result["joined"]["past"]) == 50
+
+    @patch("app.services.event_service.supabase")
+    def test_result_keys_exact(self, mock_sb):
+        self._setup(mock_sb, [self._ev(1, self.FUTURE, "u1")], [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert set(result.keys()) == {"organized", "joined"}
+        assert set(result["organized"].keys()) == {"upcoming", "past"}
+        assert set(result["joined"].keys()) == {"upcoming", "past"}
