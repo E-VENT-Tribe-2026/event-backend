@@ -27,8 +27,16 @@ def validate_username_value(v: str) -> str:
 def validate_full_name_value(v: str) -> str:
     """Validate a full-name string and return the stripped value.
 
+    Leading and trailing whitespace (including newlines) is stripped before
+    validation. This is intentional normalisation — ``"John Doe\\n"`` is
+    stored as ``"John Doe"`` — consistent with how name fields are handled
+    in other parts of the application.  This differs from the username
+    validator, which rejects trailing whitespace outright, because a trailing
+    newline in a name is almost always a copy-paste artefact rather than an
+    attempt to bypass validation.
+
     Raises ValueError (converted to HTTP 422 by Pydantic) when the value
-    does not meet the full-name rules.
+    does not meet the full-name rules after stripping.
     """
     stripped = str(v).strip()
     if not stripped:

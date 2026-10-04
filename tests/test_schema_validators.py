@@ -58,6 +58,32 @@ class TestChooseUsernameRequestValidator:
         schema = ChooseUsernameRequest(username="john", full_name="Mary-Jane O'Neill")
         assert schema.full_name == "Mary-Jane O'Neill"
 
+    def test_full_name_trailing_newline_is_normalised(self):
+        # Trailing newlines are stripped (intentional normalisation) — the stored value
+        # must equal the stripped form, not raise an error.
+        schema = ChooseUsernameRequest(username="john", full_name="John Doe\n")
+        assert schema.full_name == "John Doe"
+
+    def test_rejects_full_name_too_short(self):
+        # A name that is only 2 characters after stripping must be rejected.
+        with pytest.raises(ValidationError):
+            ChooseUsernameRequest(username="john", full_name="Jo")
+
+    def test_rejects_full_name_too_long(self):
+        # A name that exceeds 50 characters after stripping must be rejected.
+        with pytest.raises(ValidationError):
+            ChooseUsernameRequest(username="john", full_name="A" * 51)
+
+    def test_rejects_full_name_no_letters(self):
+        # A value with no alphabetic characters must be rejected.
+        with pytest.raises(ValidationError):
+            ChooseUsernameRequest(username="john", full_name="12345")
+
+    def test_rejects_full_name_disallowed_characters(self):
+        # An at-sign is not an allowed character in a full name.
+        with pytest.raises(ValidationError):
+            ChooseUsernameRequest(username="john", full_name="John@Doe")
+
 
 class TestRegisterRequestValidator:
     def _base_payload(self, **overrides):
