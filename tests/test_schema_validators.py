@@ -77,6 +77,10 @@ class TestRegisterRequestValidator:
         with pytest.raises(ValidationError):
             RegisterRequest(**self._base_payload(full_name="   "))
 
+    def test_rejects_username_with_trailing_newline(self):
+        with pytest.raises(ValidationError):
+            RegisterRequest(**self._base_payload(username="john\n"))
+
 
 class TestProfileUpdateRequestValidator:
     def test_accepts_username_none(self):
@@ -94,3 +98,7 @@ class TestProfileUpdateRequestValidator:
     def test_rejects_non_none_full_name_spaces_only(self):
         with pytest.raises(ValidationError):
             ProfileUpdateRequest(full_name="   ")
+
+    def test_rejects_username_with_trailing_newline(self):
+        with pytest.raises(ValidationError):
+            ProfileUpdateRequest(username="john\n")
