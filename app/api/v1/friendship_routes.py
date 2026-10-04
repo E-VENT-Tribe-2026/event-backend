@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from app.services.friendship_service import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -14,6 +14,7 @@ from app.services.friendship_service import (
     cancel_friend_request,
     get_friends,
     remove_friend,
+    get_friend_suggestions,
 )
 from app.schemas.friendship_schema import (
     FriendItem,
@@ -86,3 +87,13 @@ def list_friends(
 @router.delete("/{friend_id}", response_model=MessageResponse)
 def unfriend(friend_id: UUID, user=Depends(get_current_user)):
     return remove_friend(user.id, str(friend_id))
+
+
+@router.get("/suggestions", response_model=FriendPage)
+def get_suggestions(
+    page: int = Query(1, ge=1, le=MAX_PAGE),
+    limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    user=Depends(get_current_onboarded_user),
+):
+    """Get list of users who are not yet friends and have no active requests."""
+    return get_friend_suggestions(user.id, page, limit)

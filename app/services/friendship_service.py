@@ -372,3 +372,78 @@ def remove_friend(user_id: str, friend_id: str) -> dict:
     if not resp.data:
         raise friend_error(404, "friendship_not_found", "You are not friends with this user.")
     return {"message": "Friend removed"}
+
+def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAGE_LIMIT) -> dict:
+    """Return paginated profiles that are not the current user, not already friends,
+    and have no pending friend request (in either direction) with the current user."""
+    uid = _uuid(user_id)
+    start = (page - 1) * limit
+
+    # --- 1. Collect IDs to exclude ---
+
+    # Existing friends (friendships table stores one row per pair, either direction)
+    fs_resp = (
+        supabase.table("friendships")
+        .select("user_id, friend_id")
+        .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
+        .execute()
+    )
+    friend_ids = set()
+    for row in fs_resp.data or []:
+        other = row["friend_id"] if _norm(row["user_id"]) == _norm(uid) else row["user_id"]
+        friend_ids.add(_norm(other))
+
+    # Pending requests (sent or received)
+    rq_resp = (
+        supabase.table("friend_requests")
+        .select("initiator_id, receiver_id")
+        .eq("status", "pending")
+        .or_(f"initiator_id.eq.{uid},receiver_id.eq.{uid}")
+        .execute()
+    )
+    pending_ids = set()
+    for row in rq_resp.data or []:
+        other = row["receiver_id"] if _norm(row["initiator_id"]) == _norm(uid) else row["initiator_id"]
+        pending_ids.add(_norm(other))
+
+    excluded = friend_ids | pending_ids | {_norm(uid)}
+
+    # --- 2. Query profiles, excluding the collected IDs ---
+    # Supabase PostgREST: use neq / not.in_ filter.
+    # Build a comma-separated list for the `not.in` filter.
+    query = (
+        supabase.table("profiles")
+        .select("id", count="exact")
+    )
+    if excluded:
+        query = query.not_.in_("id", list(excluded))
+
+    count_resp = query.execute()
+    total = count_resp.count or 0
+
+    # Fetch the page of IDs
+    page_query = (
+        supabase.table("profiles")
+        .select("id")
+        .order("id")          # stable ordering for consistent pagination
+        .range(start, start + limit)
+    )
+    if excluded:
+        page_query = page_query.not_.in_("id", list(excluded))
+
+    page_resp = page_query.execute()
+    rows = page_resp.data or []
+    has_more = (start + len(rows)) < total
+
+    if not rows:
+        return {"page": page, "limit": limit, "has_more": False, "data": []}
+
+    suggestion_ids = [r["id"] for r in rows]
+    summaries = get_user_summaries(suggestion_ids)
+
+    data = [
+        {"friend_since": None, "user": summaries[sid]}
+        for sid in suggestion_ids
+        if sid in summaries
+    ]
+    return {"page": page, "limit": limit, "has_more": has_more, "data": data}
