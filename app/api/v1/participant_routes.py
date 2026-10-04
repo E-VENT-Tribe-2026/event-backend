@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from app.db.supabase_client import supabase
 from app.services.participant_service import (
     join_event,
@@ -21,7 +21,7 @@ router = APIRouter()
 def join_event_api(
     event_id: str,
     background_tasks: BackgroundTasks,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     data, event = join_event(user.id, event_id)
     background_tasks.add_task(_join_side_effects, user.id, event_id, event)
@@ -32,7 +32,7 @@ def join_event_api(
 def leave_event_api(
     event_id: str,
     background_tasks: BackgroundTasks,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     result, event = leave_event(user.id, event_id)
     background_tasks.add_task(_leave_side_effects, user.id, event_id, event)
@@ -51,7 +51,7 @@ def participants_count_api(event_id: str):
 
 
 @router.get("/{event_id}/my-status")
-def my_status_api(event_id: str, user=Depends(get_current_user)):
+def my_status_api(event_id: str, user=Depends(get_current_onboarded_user)):
     response = (
         supabase.table("event_participants")
         .select("status")
@@ -69,7 +69,7 @@ def remove_participant_api(
     event_id: str,
     participant_id: str,
     background_tasks: BackgroundTasks,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     result, event = remove_participant(user.id, event_id, participant_id)
     background_tasks.add_task(_remove_side_effects, user.id, event_id, participant_id, event)
@@ -77,7 +77,7 @@ def remove_participant_api(
 
 
 @router.get("/my/events")
-def my_events(user=Depends(get_current_user)):
+def my_events(user=Depends(get_current_onboarded_user)):
     rows = get_my_events(user.id)
     # _single_profile works for any embed shape; the organizer lands on the same event object, so the row keeps its shape.
     attach_organizers([_single_profile(row.get("events")) for row in rows])

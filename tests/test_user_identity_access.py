@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from tests._supabase_mock import make_table_router
 
 
@@ -69,7 +69,7 @@ client = TestClient(app)
 class TestChatSendMessageRouteIncludesSender:
     @patch("app.api.v1.chat_routes.send_message")
     def test_post_message_response_includes_nested_sender(self, mock_send):
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             mock_send.return_value = {
                 "id": 1,
@@ -101,7 +101,7 @@ class TestChatSendMessageRouteIncludesSender:
             assert data["sender"]["username"] == "john_42"
             assert data["sender"]["icon_id"] == "icon_fox"
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ class TestChatUpdateMessageRouteRealPath:
             "avatar_kind": "icon", "icon_id": "icon_fox", "avatar_url": None,
         }
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch("app.services.chat_service.supabase", mock_sb), \
                  patch("app.services.chat_service.get_user_summaries", return_value={"u1": summary}):
@@ -143,7 +143,7 @@ class TestChatUpdateMessageRouteRealPath:
             assert data["sender_role"] == "participant"
             assert data["content"] == "new"
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ class TestChatMessagesRouteRealPath:
             "avatar_kind": "icon", "icon_id": "icon_fox", "avatar_url": None,
         }
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch("app.services.chat_service.supabase", mock_sb), \
                  patch("app.services.chat_service.get_user_summaries", return_value={"u1": summary}):
@@ -265,4 +265,4 @@ class TestChatMessagesRouteRealPath:
             assert system_msg["sender_name"] == "System"
             assert system_msg["sender_role"] == "system"
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)

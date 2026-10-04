@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
 from fastapi import HTTPException
 from app.services import event_service
@@ -41,7 +41,7 @@ def read_max_price():
     return {"max_price": max_price}
 
 @router.get("/my-events")
-def get_all_my_events(user=Depends(get_current_user)):
+def get_all_my_events(user=Depends(get_current_onboarded_user)):
     """Return all events created by the logged-in user."""
 
     user_id = getattr(user, "id", None) or user.get("id")
@@ -79,7 +79,7 @@ def get_events(
 @router.post("/")
 def create_new_event(
     data: EventCreateRequest,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     """Create a new event. Authenticated users only."""
     # CHANGE: Add mode="json" to convert datetimes to strings
@@ -91,7 +91,7 @@ def update_existing_event(
     event_id: str,
     data: EventUpdateRequest,
     background_tasks: BackgroundTasks,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     """Update an event. Only the creator can update."""
     result, original_event, updated_event = update_event(
@@ -112,13 +112,13 @@ def read_event(event_id: str):
 @router.delete("/{event_id}")
 def delete_existing_event(
     event_id: str,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     """Delete an event. Only the creator can delete."""
     return delete_event(user.id, event_id)
 
 @router.patch("/{event_id}/cancel")
-def cancel_existing_event(event_id: str, user=Depends(get_current_user)):
+def cancel_existing_event(event_id: str, user=Depends(get_current_onboarded_user)):
     from app.services.event_service import cancel_event
     return cancel_event(user.id, event_id)
 

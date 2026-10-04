@@ -78,11 +78,11 @@ class TestAuthRoutes:
             id = "u1"
             email = "test@test.com"
 
-        def override_get_current_user():
+        def override_get_current_onboarded_user():
             return MockUser()
 
-        from app.core.dependencies import get_current_user
-        app.dependency_overrides[get_current_user] = override_get_current_user
+        from app.core.dependencies import get_current_user, get_current_onboarded_user
+        app.dependency_overrides[get_current_onboarded_user] = override_get_current_onboarded_user
 
         try:
             mock_change_password.return_value = {"message": "Password updated successfully."}
@@ -102,7 +102,7 @@ class TestAuthRoutes:
                 new_password="password456"
             )
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
     @patch("app.api.v1.auth_routes.request_password_reset")
     def test_forgot_password_route(self, mock_forgot_password):

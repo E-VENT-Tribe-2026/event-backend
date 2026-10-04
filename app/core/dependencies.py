@@ -24,6 +24,32 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
+def get_current_onboarded_user(user=Depends(get_current_user)):
+    """Extends get_current_user by requiring a completed profile (username + full_name)."""
+    try:
+        result = (
+            supabase.table("profiles")
+            .select("username, full_name")
+            .eq("id", user.id)
+            .single()
+            .execute()
+        )
+        data = result.data or {}
+    except Exception:
+        data = {}
+
+    username = (data.get("username") or "").strip()
+    full_name = (data.get("full_name") or "").strip()
+
+    if not username or not full_name:
+        raise HTTPException(
+            status_code=403,
+            detail="Profile setup required: please choose a username and enter your full name.",
+        )
+
+    return user
+
+
 def require_admin(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     user = Depends(get_current_user)
