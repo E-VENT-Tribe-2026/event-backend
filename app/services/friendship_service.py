@@ -381,7 +381,7 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
 
     # --- 1. Collect IDs to exclude ---
 
-    # Existing friends (friendships table stores one row per pair, either direction)
+    # Existing friends (one row per pair, either direction)
     fs_resp = (
         supabase.table("friendships")
         .select("user_id, friend_id")
@@ -408,25 +408,25 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
 
     excluded = friend_ids | pending_ids | {_norm(uid)}
 
-    # --- 2. Query profiles, excluding the collected IDs ---
-    # Supabase PostgREST: use neq / not.in_ filter.
-    # Build a comma-separated list for the `not.in` filter.
-    query = (
-        supabase.table("profiles")
-        .select("id", count="exact")
+    # --- 2. Query profiles, excluding collected IDs ---
+    base = supabase.table("profiles").select(
+        "id, username, full_name, avatar_kind, icon_id, avatar_url",
+        count="exact",
     )
     if excluded:
-        query = query.not_.in_("id", list(excluded))
+        base = base.not_.in_("id", list(excluded))
 
-    count_resp = query.execute()
+    count_resp = base.execute()
     total = count_resp.count or 0
 
-    # Fetch the page of IDs
+    if total == 0:
+        return {"page": page, "limit": limit, "has_more": False, "data": []}
+
     page_query = (
         supabase.table("profiles")
-        .select("id")
-        .order("id")          # stable ordering for consistent pagination
-        .range(start, start + limit)
+        .select("id, username, full_name, avatar_kind, icon_id, avatar_url")
+        .order("id")
+        .range(start, start + limit - 1)
     )
     if excluded:
         page_query = page_query.not_.in_("id", list(excluded))
@@ -435,15 +435,6 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
     rows = page_resp.data or []
     has_more = (start + len(rows)) < total
 
-    if not rows:
-        return {"page": page, "limit": limit, "has_more": False, "data": []}
-
-    suggestion_ids = [r["id"] for r in rows]
-    summaries = get_user_summaries(suggestion_ids)
-
-    data = [
-        {"friend_since": None, "user": summaries[sid]}
-        for sid in suggestion_ids
-        if sid in summaries
-    ]
+    from app.services.profile_service import build_user_summary
+    data = [{"user": build_user_summary(row)} for row in rows]
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}

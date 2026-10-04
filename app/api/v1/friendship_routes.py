@@ -24,6 +24,7 @@ from app.schemas.friendship_schema import (
     FriendRequestPage,
     MessageResponse,
     SendFriendRequest,
+    SuggestionPage,
 )
 
 router = APIRouter()
@@ -89,7 +90,7 @@ def unfriend(friend_id: UUID, user=Depends(get_current_user)):
     return remove_friend(user.id, str(friend_id))
 
 
-@router.get("/suggestions", response_model=FriendPage)
+@router.get("/suggestions", response_model=SuggestionPage)
 def get_suggestions(
     page: int = Query(1, ge=1, le=MAX_PAGE),
     limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
