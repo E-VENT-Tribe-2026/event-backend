@@ -48,6 +48,16 @@ class TestChooseUsernameRequestValidator:
         schema = ChooseUsernameRequest(username="JOHN", full_name="John Doe")
         assert schema.username == "john"
 
+    def test_accepts_full_name_with_right_single_quote(self):
+        # U+2019 RIGHT SINGLE QUOTATION MARK must be accepted (e.g. O\u2019Brien)
+        schema = ChooseUsernameRequest(username="john", full_name="O\u2019Brien")
+        assert schema.full_name == "O\u2019Brien"
+
+    def test_accepts_full_name_with_common_punctuation(self):
+        # Hyphens, apostrophes, and periods in names must be accepted
+        schema = ChooseUsernameRequest(username="john", full_name="Mary-Jane O'Neill")
+        assert schema.full_name == "Mary-Jane O'Neill"
+
 
 class TestRegisterRequestValidator:
     def _base_payload(self, **overrides):
@@ -81,6 +91,11 @@ class TestRegisterRequestValidator:
         with pytest.raises(ValidationError):
             RegisterRequest(**self._base_payload(username="john\n"))
 
+    def test_accepts_full_name_with_right_single_quote(self):
+        # U+2019 RIGHT SINGLE QUOTATION MARK must be accepted
+        req = RegisterRequest(**self._base_payload(full_name="O\u2019Brien"))
+        assert req.full_name == "O\u2019Brien"
+
 
 class TestProfileUpdateRequestValidator:
     def test_accepts_username_none(self):
@@ -98,6 +113,11 @@ class TestProfileUpdateRequestValidator:
     def test_rejects_non_none_full_name_spaces_only(self):
         with pytest.raises(ValidationError):
             ProfileUpdateRequest(full_name="   ")
+
+    def test_accepts_full_name_with_right_single_quote(self):
+        # U+2019 RIGHT SINGLE QUOTATION MARK must be accepted
+        req = ProfileUpdateRequest(full_name="O\u2019Brien")
+        assert req.full_name == "O\u2019Brien"
 
     def test_rejects_username_with_trailing_newline(self):
         with pytest.raises(ValidationError):

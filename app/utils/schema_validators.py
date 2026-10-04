@@ -6,7 +6,7 @@ validation rules stay in one place and cannot silently diverge.
 
 import re
 
-_ALLOWED_NAME_PUNCTUATION = set(".'-,\"''()")
+_ALLOWED_NAME_PUNCTUATION = set(".'-,\"''\u2019()")
 
 
 def validate_username_value(v: str) -> str:
