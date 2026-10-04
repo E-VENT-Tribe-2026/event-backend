@@ -1,7 +1,10 @@
+import re
 from datetime import date
 
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from typing import List, Optional
+
+from app.utils.schema_validators import validate_username_value, validate_full_name_value
 
 
 class RegisterRequest(BaseModel):
@@ -9,9 +12,23 @@ class RegisterRequest(BaseModel):
     password: str
     username: Optional[str] = None
     full_name: Optional[str] = None
-    dob: date           
-    gender: str         
+    dob: date
+    gender: str
     interests: List[str] = []
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def validate_username(cls, v):
+        if v is None:
+            return None
+        return validate_username_value(v)
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def validate_full_name(cls, v):
+        if v is None:
+            return None
+        return validate_full_name_value(v)
 
 
 class LoginRequest(BaseModel):
@@ -63,6 +80,7 @@ class MFAVerifyResponse(BaseModel):
     is_verified: bool = True
     message: str = "Sign-in successfully verified."
 
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -77,4 +95,14 @@ class ChangePasswordRequest(BaseModel):
 
 class ChooseUsernameRequest(BaseModel):
     username: str
-    full_name: str
+    full_name: str
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def validate_username(cls, v):
+        return validate_username_value(v)
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def validate_full_name(cls, v):
+        return validate_full_name_value(v)

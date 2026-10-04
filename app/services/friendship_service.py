@@ -372,3 +372,69 @@ def remove_friend(user_id: str, friend_id: str) -> dict:
     if not resp.data:
         raise friend_error(404, "friendship_not_found", "You are not friends with this user.")
     return {"message": "Friend removed"}
+
+def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAGE_LIMIT) -> dict:
+    """Return paginated profiles that are not the current user, not already friends,
+    and have no pending friend request (in either direction) with the current user."""
+    uid = _uuid(user_id)
+    start = (page - 1) * limit
+
+    # --- 1. Collect IDs to exclude ---
+
+    # Existing friends (one row per pair, either direction)
+    fs_resp = (
+        supabase.table("friendships")
+        .select("user_id, friend_id")
+        .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
+        .execute()
+    )
+    friend_ids = set()
+    for row in fs_resp.data or []:
+        other = row["friend_id"] if _norm(row["user_id"]) == _norm(uid) else row["user_id"]
+        friend_ids.add(_norm(other))
+
+    # Pending requests (sent or received)
+    rq_resp = (
+        supabase.table("friend_requests")
+        .select("initiator_id, receiver_id")
+        .eq("status", "pending")
+        .or_(f"initiator_id.eq.{uid},receiver_id.eq.{uid}")
+        .execute()
+    )
+    pending_ids = set()
+    for row in rq_resp.data or []:
+        other = row["receiver_id"] if _norm(row["initiator_id"]) == _norm(uid) else row["initiator_id"]
+        pending_ids.add(_norm(other))
+
+    excluded = friend_ids | pending_ids | {_norm(uid)}
+
+    # --- 2. Query profiles, excluding collected IDs ---
+    base = supabase.table("profiles").select(
+        "id, username, full_name, avatar_kind, icon_id, avatar_url",
+        count="exact",
+    )
+    if excluded:
+        base = base.not_.in_("id", list(excluded))
+
+    count_resp = base.execute()
+    total = count_resp.count or 0
+
+    if total == 0:
+        return {"page": page, "limit": limit, "has_more": False, "data": []}
+
+    page_query = (
+        supabase.table("profiles")
+        .select("id, username, full_name, avatar_kind, icon_id, avatar_url")
+        .order("id")
+        .range(start, start + limit - 1)
+    )
+    if excluded:
+        page_query = page_query.not_.in_("id", list(excluded))
+
+    page_resp = page_query.execute()
+    rows = page_resp.data or []
+    has_more = (start + len(rows)) < total
+
+    from app.services.profile_service import build_user_summary
+    data = [{"user": build_user_summary(row)} for row in rows]
+    return {"page": page, "limit": limit, "has_more": has_more, "data": data}

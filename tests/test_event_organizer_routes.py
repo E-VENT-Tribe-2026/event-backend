@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from tests._supabase_mock import make_table_router
 
 
@@ -133,7 +133,7 @@ class TestMyEventsRouteOrganizer:
         rows = [{"id": "e1", "title": "Party", "created_by": "u1"}]
         response_body = {"status": "success", "total_count": 1, "data": rows}
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch(
                 "app.api.v1.event_routes.get_all_events_by_user",
@@ -148,7 +148,7 @@ class TestMyEventsRouteOrganizer:
                     headers={"Authorization": "Bearer token"},
                 )
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
         assert response.status_code == 200
         body = response.json()
@@ -168,7 +168,7 @@ class TestSavedEventsRouteOrganizer:
     def test_saved_events_exposes_organizer_on_each_item(self):
         rows = [{"id": "e1", "title": "Party", "created_by": "u1"}]
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch(
                 "app.api.v1.saved_event_routes.get_saved_events",
@@ -183,7 +183,7 @@ class TestSavedEventsRouteOrganizer:
                     headers={"Authorization": "Bearer token"},
                 )
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
         assert response.status_code == 200
         body = response.json()
@@ -207,7 +207,7 @@ class TestRecommendationsRouteOrganizer:
             data=[{"id": "e1", "created_by": "u1"}]
         )
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch(
                 "app.api.v1.recommendation_routes.get_recommendations",
@@ -224,7 +224,7 @@ class TestRecommendationsRouteOrganizer:
                     headers={"Authorization": "Bearer token"},
                 )
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
         assert response.status_code == 200
         body = response.json()
@@ -251,7 +251,7 @@ class TestMyParticipantEventsRouteOrganizer:
             {"event_id": "e2", "events": None},
         ]
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch(
                 "app.api.v1.participant_routes.get_my_events",
@@ -266,7 +266,7 @@ class TestMyParticipantEventsRouteOrganizer:
                     headers={"Authorization": "Bearer token"},
                 )
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
         assert response.status_code == 200
         body = response.json()
@@ -283,7 +283,7 @@ class TestMyParticipantEventsRouteOrganizer:
             {"event_id": "e3", "events": [{"id": "e3", "title": "Gig", "created_by": "u1"}]},
         ]
 
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+        app.dependency_overrides[get_current_onboarded_user] = lambda: SimpleNamespace(id="u1")
         try:
             with patch(
                 "app.api.v1.participant_routes.get_my_events",
@@ -298,7 +298,7 @@ class TestMyParticipantEventsRouteOrganizer:
                     headers={"Authorization": "Bearer token"},
                 )
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
         assert response.status_code == 200
         body = response.json()

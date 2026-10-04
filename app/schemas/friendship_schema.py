@@ -36,6 +36,17 @@ class FriendPage(BaseModel):
     data: List[FriendItem]
 
 
+class SuggestionItem(BaseModel):
+    user: UserSummary
+
+
+class SuggestionPage(BaseModel):
+    page: int
+    limit: int
+    has_more: bool
+    data: List[SuggestionItem]
+
+
 class FriendRequestCount(BaseModel):
     count: int
 

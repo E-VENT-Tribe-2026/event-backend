@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from app.schemas.chat_schema import ChatMessageCreate, ChatMessageUpdate, ChatMessageResponse
 from app.services.chat_service import (
     send_message,
@@ -35,7 +35,7 @@ router = APIRouter()
 def post_message(
     event_id: str,
     body: ChatMessageCreate,
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return send_message(user.id, event_id, body.content)
 
@@ -62,7 +62,7 @@ def list_messages(
     event_id: str,
     page: int = Query(1, ge=1, description="Page number (starts at 1)."),
     limit: int = Query(50, le=100, description="Number of messages per page (max 100)."),
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return get_event_messages(user.id, event_id, page, limit)
 
@@ -92,7 +92,7 @@ def list_messages(
 def edit_message(
     message_id: int,
     body: ChatMessageUpdate,
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return update_message(user.id, message_id, body.content)
 
@@ -118,6 +118,6 @@ def edit_message(
 )
 def remove_message(
     message_id: int,
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return delete_message(user.id, message_id)

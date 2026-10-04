@@ -128,9 +128,10 @@ def login_user(email: str, password: str):
         })
 
         if response.session is None:
+            logger.warning("login_user: sign-in succeeded but session is None (likely unconfirmed email) for email=%s", email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Email not confirmed. Please check your inbox."
+                detail="Login failed. Please check your credentials."
             )
 
         user_id = response.user.id
@@ -193,12 +194,13 @@ def login_user(email: str, password: str):
         if "invalid login credentials" in error:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password."
+                detail="Login failed. Please check your credentials."
             )
         if "email not confirmed" in error:
+            logger.warning("login_user: email not confirmed for email=%s", email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Email not confirmed. Please check your inbox."
+                detail="Login failed. Please check your credentials."
             )
         if "too many requests" in error:
             raise HTTPException(

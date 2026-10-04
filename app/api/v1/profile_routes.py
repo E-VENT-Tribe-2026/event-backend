@@ -2,7 +2,7 @@ import time
 import mimetypes
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
@@ -60,7 +60,7 @@ def put_username(
 
 
 @router.get("/me")
-def read_my_profile(user=Depends(get_current_user)):
+def read_my_profile(user=Depends(get_current_onboarded_user)):
     """Returns the full profile of the authenticated user."""
     return get_profile(user.id)
 
@@ -68,7 +68,7 @@ def read_my_profile(user=Depends(get_current_user)):
 @router.put("/me")
 def update_my_profile(
     data: ProfileUpdateRequest,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     """Update profile fields for the authenticated user."""
     update_data = data.model_dump(exclude_unset=True)
@@ -78,7 +78,7 @@ def update_my_profile(
 @router.patch("/location")
 def update_my_location(
     data: LocationUpdateRequest,
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     """Update the location of the authenticated user."""
     return update_location(user.id, data.latitude, data.longitude)
@@ -86,7 +86,7 @@ def update_my_location(
 @router.post("/upload-photo")
 async def upload_profile_photo(
     file: UploadFile = File(...),
-    user=Depends(get_current_user)
+    user=Depends(get_current_onboarded_user)
 ):
     """Upload profile photo to Supabase storage and update profile avatar_url."""
     try:

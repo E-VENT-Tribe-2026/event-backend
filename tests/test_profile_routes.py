@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock, patch
 from app.main import app
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 
 client = TestClient(app)
 
@@ -17,7 +17,7 @@ class MockUser:
 class TestProfileRoutes:
     @patch("app.api.v1.profile_routes.get_profile")
     def test_get_my_profile_route_includes_username(self, mock_get):
-        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        app.dependency_overrides[get_current_onboarded_user] = lambda: MockUser()
         try:
             mock_get.return_value = {
                 "id": "u1",
@@ -30,7 +30,7 @@ class TestProfileRoutes:
             assert response.json()["full_name"] == "Alice Smith"
             mock_get.assert_called_once_with("u1")
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
     @patch("app.api.v1.profile_routes.choose_username")
     def test_post_choose_username_route(self, mock_choose):
@@ -48,7 +48,7 @@ class TestProfileRoutes:
             )
             assert response.status_code == 200
             assert response.json()["username"] == "bob"
-            mock_choose.assert_called_once_with("u1", "Bob", "Bob Smith")
+            mock_choose.assert_called_once_with("u1", "bob", "Bob Smith")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
@@ -68,7 +68,7 @@ class TestProfileRoutes:
             )
             assert response.status_code == 200
             assert response.json()["username"] == "charlie"
-            mock_choose.assert_called_once_with("u1", "Charlie", "Charlie Brown")
+            mock_choose.assert_called_once_with("u1", "charlie", "Charlie Brown")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
@@ -88,13 +88,13 @@ class TestProfileRoutes:
             )
             assert response.status_code == 200
             assert response.json()["username"] == "david"
-            mock_choose.assert_called_once_with("u1", "David", "David Miller")
+            mock_choose.assert_called_once_with("u1", "david", "David Miller")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
     @patch("app.api.v1.profile_routes.update_profile")
     def test_put_my_profile_update(self, mock_update):
-        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        app.dependency_overrides[get_current_onboarded_user] = lambda: MockUser()
         try:
             mock_update.return_value = {
                 "id": "u1",
@@ -108,11 +108,11 @@ class TestProfileRoutes:
             assert response.status_code == 200
             mock_update.assert_called_once_with("u1", {"full_name": "Jane Doe"})
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
     @patch("app.api.v1.profile_routes.get_profile")
     def test_get_my_profile_route_includes_banner_and_avatar_kind(self, mock_get):
-        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        app.dependency_overrides[get_current_onboarded_user] = lambda: MockUser()
         try:
             mock_get.return_value = {
                 "id": "u1",
@@ -131,11 +131,11 @@ class TestProfileRoutes:
             assert data["avatar_kind"] == "icon"
             assert data["icon_id"] == "icon_fox"
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
     @patch("app.api.v1.profile_routes.update_profile")
     def test_put_my_profile_accepts_banner_and_avatar_kind(self, mock_update):
-        app.dependency_overrides[get_current_user] = lambda: MockUser()
+        app.dependency_overrides[get_current_onboarded_user] = lambda: MockUser()
         try:
             mock_update.return_value = {
                 "id": "u1",
@@ -160,7 +160,7 @@ class TestProfileRoutes:
                 "avatar_url": "https://example.com/me.png"
             })
         finally:
-            app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
     def test_put_my_profile_unauthenticated(self):
         # When no user is authenticated, updating own profile is refused

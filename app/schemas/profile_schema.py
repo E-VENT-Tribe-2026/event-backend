@@ -1,5 +1,7 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, List
+
+from app.utils.schema_validators import validate_username_value, validate_full_name_value
 
 
 class ProfileResponse(BaseModel):
@@ -37,6 +39,20 @@ class ProfileUpdateRequest(BaseModel):
     visibility: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def validate_username(cls, v):
+        if v is None:
+            return None
+        return validate_username_value(v)
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def validate_full_name(cls, v):
+        if v is None:
+            return None
+        return validate_full_name_value(v)
 
 
 class LocationUpdateRequest(BaseModel):

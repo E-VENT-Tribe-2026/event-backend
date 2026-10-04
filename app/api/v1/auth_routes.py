@@ -25,7 +25,7 @@ from app.services.auth_service import (
     get_mfa_status,
 )
 from app.services.auth_service import reset_password as reset_user_password
-from app.core.dependencies import get_current_user, security
+from app.core.dependencies import get_current_user, get_current_onboarded_user, security
 from app.core.limiter import limiter
 import httpx
 
@@ -192,7 +192,7 @@ def update_user_password(request: Request, payload: ResetPasswordPayload):
 
 @router.post("/change-password")
 @limiter.limit("5/minute")
-def change_user_password(request: Request, data: ChangePasswordRequest, user=Depends(get_current_user)):
+def change_user_password(request: Request, data: ChangePasswordRequest, user=Depends(get_current_onboarded_user)):
     return change_password(
         email=user.email,
         user_id=user.id,
