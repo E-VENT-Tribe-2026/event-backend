@@ -48,7 +48,7 @@ class TestProfileRoutes:
             )
             assert response.status_code == 200
             assert response.json()["username"] == "bob"
-            mock_choose.assert_called_once_with("u1", "Bob", "Bob Smith")
+            mock_choose.assert_called_once_with("u1", "bob", "Bob Smith")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
@@ -68,7 +68,7 @@ class TestProfileRoutes:
             )
             assert response.status_code == 200
             assert response.json()["username"] == "charlie"
-            mock_choose.assert_called_once_with("u1", "Charlie", "Charlie Brown")
+            mock_choose.assert_called_once_with("u1", "charlie", "Charlie Brown")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
@@ -88,7 +88,7 @@ class TestProfileRoutes:
             )
             assert response.status_code == 200
             assert response.json()["username"] == "david"
-            mock_choose.assert_called_once_with("u1", "David", "David Miller")
+            mock_choose.assert_called_once_with("u1", "david", "David Miller")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
