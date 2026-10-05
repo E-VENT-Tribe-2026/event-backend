@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.utils.validators import validate_username, validate_full_name
+from app.utils.query_safety import escape_like
 
 logger = logging.getLogger(__name__)
 
@@ -299,10 +300,6 @@ PUBLIC_PROFILE_COLUMNS = (
 )
 SEARCH_COLUMNS = "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, username"
 
-
-def escape_like(value: str) -> str:
-    """Escape LIKE wildcards so user input is matched literally."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def get_public_profile(user_id: str):

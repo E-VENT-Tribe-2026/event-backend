@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.utils.query_safety import like_contains
 from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
@@ -484,8 +485,9 @@ def list_events(
 
     if date:
         query = query.gte("start_datetime", date)
-    if city:
-        query = query.ilike("location_name", f"%{city}%")
+    city_pattern = like_contains(city) if city else None
+    if city_pattern:
+        query = query.ilike("location_name", city_pattern)
     if category:
         query = query.eq("category", category)
     if upcoming:
