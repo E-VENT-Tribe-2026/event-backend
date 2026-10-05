@@ -269,6 +269,15 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             detail="Not authorized to update this event"
         )
 
+    if event.get("status") == "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit a cancelled event"
+        )
+
+    # Disallow reviving or directly modifying event status via update
+    update_data.pop("status", None)
+
     # Regenerate embedding if needed
     if "title" in update_data or "description" in update_data or "category" in update_data:
         title = update_data.get("title", event.get("title", ""))
@@ -311,32 +320,10 @@ def update_event(user_id: str, event_id: str, update_data: dict):
     return response.data[0], event, updated_event
 
 def delete_event(user_id: str, event_id: str):
-    event = get_event(event_id)
-
-    if event["created_by"] != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this event"
-        )
-
-    participants = supabase.table("event_participants") \
-        .select("user_id") \
-        .eq("event_id", event_id) \
-        .execute()
-    
-    delete_response = supabase.table("events").delete().eq("id", event_id).execute()
-    if delete_response.data:
-        # Send cancellation emails before notifying
-        _email_participants(event, "cancellation")
-        username = get_username(user_id)
-        for p in participants.data:
-            create_notification(
-                p["user_id"],
-                event_id,
-                "event_deleted",
-                f"Event '{event['title']}' was deleted by {username}"
-            )
-    return {"message": "Event deleted successfully"}
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Events cannot be deleted; cancel the event instead."
+    )
 
 
 # Profile events intentionally share the /api/events (list_events) column set.
@@ -511,32 +498,34 @@ def cancel_event(user_id: str, event_id: str):
     if event["created_by"] != user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    if event.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Event is already cancelled")
+
+    start = _parse_start(event.get("start_datetime"))
+    if start is None or start <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Only upcoming events can be cancelled")
+
     # mark cancelled
     supabase.table("events") \
-        .update({"status": "cancelled"}) \
+        .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}) \
         .eq("id", event_id) \
         .execute()
 
-    # remove participants
+    # fetch participants to notify them (organizer and participants remain linked)
     participants = supabase.table("event_participants") \
         .select("user_id") \
         .eq("event_id", event_id) \
         .execute()
 
-    # Send cancellation emails before removing participants
+    # Send cancellation emails
     _email_participants(event, "cancellation")
-
-    supabase.table("event_participants") \
-        .delete() \
-        .eq("event_id", event_id) \
-        .execute()
 
     # notify
     from app.services.notification_service import create_notification
     
     username = get_username(user_id)
 
-    for p in participants.data:
+    for p in (participants.data or []):
         create_notification(
             p["user_id"],
             event_id,
