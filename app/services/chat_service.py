@@ -51,11 +51,31 @@ def _assert_participant(user_id: str, event_id: str) -> None:
         .eq("user_id", user_id)
         .execute()
     )
-    if not result.data:
+    if not result.data and _get_organizer_id(event_id) != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You must be a participant of this event to access its chat"
         )
+
+
+def _assert_event_not_cancelled(event_id: str) -> None:
+    try:
+        event_resp = (
+            supabase.table("events")
+            .select("status")
+            .eq("id", event_id)
+            .single()
+            .execute()
+        )
+        if event_resp.data and event_resp.data.get("status") == "cancelled":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Chat is read-only for cancelled events"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Event status lookup failed for event {event_id}: {e}")
 
 
 def _enrich_message(msg: dict, event_id: str, organizer_id=_ORGANIZER_UNSET, senders: dict = None) -> dict:
@@ -103,6 +123,7 @@ def post_system_notification(event_id: str, content: str) -> dict | None:
 
 def send_message(user_id: str, event_id: str, content: str) -> dict:
     _assert_participant(user_id, event_id)
+    _assert_event_not_cancelled(event_id)
 
     if not content or not content.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message content cannot be empty")
@@ -154,6 +175,7 @@ def get_event_messages(user_id: str, event_id: str, page: int = 1, limit: int = 
 
 def update_message(user_id: str, message_id: int, new_content: str) -> dict:
     message = _get_message_or_404(message_id)
+    _assert_event_not_cancelled(message["event_id"])
 
     if message["sender_id"] != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only edit your own messages")
@@ -176,6 +198,7 @@ def update_message(user_id: str, message_id: int, new_content: str) -> dict:
 
 def delete_message(user_id: str, message_id: int) -> dict:
     message = _get_message_or_404(message_id)
+    _assert_event_not_cancelled(message["event_id"])
 
     if message["sender_id"] != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own messages")

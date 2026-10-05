@@ -212,6 +212,23 @@ class TestUpdateEvent:
             update_event("other-user", "e1", {"title": "Hacked"})
         assert exc.value.status_code == 403
 
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    def test_update_cancelled_event_raises_400(self, mock_sb, mock_embed):
+        existing = {**self._existing_event(created_by="u1"), "status": "cancelled"}
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import update_event
+        with pytest.raises(HTTPException) as exc:
+            update_event("u1", "e1", {"title": "New Title"})
+        assert exc.value.status_code == 400
+        assert "cancelled" in exc.value.detail.lower()
+
     @patch("app.services.event_service.create_notification")
     @patch("app.services.event_service.generate_embedding", return_value=[0.5])
     @patch("app.services.event_service.supabase")
@@ -270,42 +287,12 @@ class TestUpdateEvent:
 # ──────────────────────────────────────────────
 
 class TestDeleteEvent:
-    @patch("app.services.event_service.get_username", return_value="john")
-    @patch("app.services.event_service.supabase")
-    def test_delete_success(self, mock_sb, mock_get_username):
-        existing = {"id": "e1", "created_by": "u1"}
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.delete.return_value = chain
-        chain.eq.return_value = chain
-        chain.gte.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.side_effect = [
-            MagicMock(data=existing),
-            MagicMock(data=[{"user_id": "u2"}]), # Add this mock response for the participants fetch
-            MagicMock(data=[]),
-        ]
-
-        from app.services.event_service import delete_event
-        result = delete_event("u1", "e1")
-
-        assert result["message"] == "Event deleted successfully"
-
-    @patch("app.services.event_service.supabase")
-    def test_delete_by_non_owner_raises_403(self, mock_sb):
-        existing = {"id": "e1", "created_by": "u1"}
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.return_value = MagicMock(data=existing)
-
+    def test_delete_is_refused(self):
         from app.services.event_service import delete_event
         with pytest.raises(HTTPException) as exc:
-            delete_event("intruder", "e1")
-        assert exc.value.status_code == 403
+            delete_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "cannot be deleted" in exc.value.detail.lower()
 
 
 # ──────────────────────────────────────────────
@@ -321,7 +308,13 @@ class TestCancelEvent:
         mock_notify.return_value = None
         mock_email.return_value = None
 
-        existing = {"id": "e1", "title": "Test Event", "created_by": "u1", "status": "active"}
+        existing = {
+            "id": "e1",
+            "title": "Test Event",
+            "created_by": "u1",
+            "status": "active",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
 
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -335,7 +328,6 @@ class TestCancelEvent:
             MagicMock(data=existing),            # 1. get_event
             MagicMock(data=[]),                  # 2. update status
             MagicMock(data=[{"user_id": "u2"}]), # 3. select participants
-            MagicMock(data=[]),                  # 4. delete participants
         ]
 
         from app.services.event_service import cancel_event
@@ -344,6 +336,70 @@ class TestCancelEvent:
         assert result["message"] == "Event cancelled"
         mock_notify.assert_called()
         mock_email.assert_called_once_with(existing, "cancellation")
+        # Ensure participants are NOT deleted
+        chain.delete.assert_not_called()
+
+    @patch("app.services.event_service.supabase")
+    def test_cancel_non_owner_raises_403(self, mock_sb):
+        existing = {
+            "id": "e1",
+            "created_by": "owner",
+            "status": "active",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import cancel_event
+        with pytest.raises(HTTPException) as exc:
+            cancel_event("intruder", "e1")
+        assert exc.value.status_code == 403
+
+    @patch("app.services.event_service.supabase")
+    def test_cancel_past_event_raises_400(self, mock_sb):
+        existing = {
+            "id": "e1",
+            "created_by": "u1",
+            "status": "active",
+            "start_datetime": "2000-01-01T10:00:00+00:00"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import cancel_event
+        with pytest.raises(HTTPException) as exc:
+            cancel_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "upcoming" in exc.value.detail.lower()
+
+    @patch("app.services.event_service.supabase")
+    def test_cancel_already_cancelled_raises_400(self, mock_sb):
+        existing = {
+            "id": "e1",
+            "created_by": "u1",
+            "status": "cancelled",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import cancel_event
+        with pytest.raises(HTTPException) as exc:
+            cancel_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "already cancelled" in exc.value.detail.lower()
 
 
 
@@ -543,33 +599,11 @@ def _stub_tables(mock_sb, chains):
 # ──────────────────────────────────────────────
 
 class TestDeleteEventNotifications:
-    @patch("app.services.event_service._email_participants")
-    @patch("app.services.event_service.create_notification")
-    @patch("app.services.event_service.get_username", return_value="john")
-    @patch("app.services.event_service.supabase")
-    @patch("app.services.event_service.get_event")
-    def test_notifies_participants_on_delete(self, mock_get_event, mock_sb, mock_get_username, mock_create_notification, mock_email):
-        mock_get_event.return_value = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
-
-        participants_chain = MagicMock()
-        participants_chain.select.return_value = participants_chain
-        participants_chain.eq.return_value = participants_chain
-        participants_chain.execute.return_value = MagicMock(data=[{"user_id": "p1"}])
-
-        events_chain = MagicMock()
-        events_chain.delete.return_value = events_chain
-        events_chain.eq.return_value = events_chain
-        events_chain.execute.return_value = MagicMock(data=[{"id": "e1"}])
-
-        _stub_tables(mock_sb, {"event_participants": participants_chain, "events": events_chain})
-
+    def test_delete_is_refused_without_notifications(self):
         from app.services.event_service import delete_event
-        delete_event("org1", "e1")
-
-        mock_get_username.assert_called_once_with("org1")
-        mock_create_notification.assert_called_once_with(
-            "p1", "e1", "event_deleted", "Event 'Tech Conference 2026' was deleted by john"
-        )
+        with pytest.raises(HTTPException) as exc:
+            delete_event("org1", "e1")
+        assert exc.value.status_code == 400
 
 
 # ──────────────────────────────────────────────
@@ -584,7 +618,13 @@ class TestCancelEventNotifications:
     @patch("app.services.event_service.supabase")
     @patch("app.services.event_service.get_event")
     def test_notifies_participants_on_cancel(self, mock_get_event, mock_sb, mock_create_notification, mock_get_username, mock_email):
-        mock_get_event.return_value = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+        mock_get_event.return_value = {
+            "id": "e1",
+            "title": "Tech Conference 2026",
+            "created_by": "org1",
+            "status": "active",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
 
         events_chain = MagicMock()
         events_chain.update.return_value = events_chain
@@ -605,6 +645,7 @@ class TestCancelEventNotifications:
         mock_create_notification.assert_called_once_with(
             "p1", "e1", "event_cancelled", "Event 'Tech Conference 2026' was cancelled by john"
         )
+        participants_chain.delete.assert_not_called()
 
 # ──────────────────────────────────────────────
 # attach_organizers

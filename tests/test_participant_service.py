@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timezone
 
@@ -378,3 +379,33 @@ class TestGetEventParticipantsUserSummary:
         row = result[0]
         assert row["user"] == build_user_summary(None, "u7")
         assert row["profiles"] is None
+
+
+class TestCancelledEventParticipantRestrictions:
+    @patch("app.services.participant_service.get_event")
+    def test_join_cancelled_event_raises_400(self, mock_get_event):
+        mock_get_event.return_value = {"id": "e1", "status": "cancelled", "created_by": "org1"}
+        from app.services.participant_service import join_event
+        with pytest.raises(HTTPException) as exc:
+            join_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "cancelled" in exc.value.detail.lower()
+
+    @patch("app.services.participant_service.get_event")
+    def test_leave_cancelled_event_raises_400(self, mock_get_event):
+        mock_get_event.return_value = {"id": "e1", "status": "cancelled", "created_by": "org1"}
+        from app.services.participant_service import leave_event
+        with pytest.raises(HTTPException) as exc:
+            leave_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "cancelled" in exc.value.detail.lower()
+
+    @patch("app.services.participant_service.get_event")
+    def test_remove_participant_from_cancelled_event_raises_400(self, mock_get_event):
+        mock_get_event.return_value = {"id": "e1", "status": "cancelled", "created_by": "org1"}
+        from app.services.participant_service import remove_participant
+        with pytest.raises(HTTPException) as exc:
+            remove_participant("org1", "e1", "p1")
+        assert exc.value.status_code == 400
+        assert "cancelled" in exc.value.detail.lower()
+

@@ -114,10 +114,11 @@ def delete_existing_event(
     event_id: str,
     user=Depends(get_current_onboarded_user)
 ):
-    """Delete an event. Only the creator can delete."""
+    """Delete an event. Direct deletion is refused; events must be cancelled instead."""
     return delete_event(user.id, event_id)
 
 @router.patch("/{event_id}/cancel")
+@router.post("/{event_id}/cancel")
 def cancel_existing_event(event_id: str, user=Depends(get_current_onboarded_user)):
     from app.services.event_service import cancel_event
     return cancel_event(user.id, event_id)
