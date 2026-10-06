@@ -40,12 +40,12 @@ def leave_event_api(
 
 
 @router.get("/{event_id}/participants")
-def participants_api(event_id: str):
+def participants_api(event_id: str, user=Depends(get_current_user)):
     return get_event_participants(event_id)
 
 
 @router.get("/{event_id}/participants/count")
-def participants_count_api(event_id: str):
+def participants_count_api(event_id: str, user=Depends(get_current_user)):
     participants = get_event_participants(event_id)
     return {"event_id": event_id, "count": len(participants)}
 

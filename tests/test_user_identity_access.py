@@ -28,6 +28,76 @@ class TestPublicPathsRegression:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Regression guards: participant list / count must verify the token with
+# Supabase (get_current_user), not rely on the middleware's unsigned decode.
+# ────────────────────────────────────────────────────────────────────────────
+
+# Well-formed JWT with a far-future exp and a garbage signature.
+FORGED_JWT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJzdWIiOiJhdHRhY2tlciIsImV4cCI6NDEwMjQ0NDgwMH0"
+    ".not-a-real-signature"
+)
+
+PARTICIPANT_READ_ROUTES = [
+    "/api/participants/e1/participants",
+    "/api/participants/e1/participants/count",
+]
+
+
+class TestParticipantRoutesRequireVerifiedAuth:
+    @pytest.fixture(autouse=True)
+    def _no_auth_override(self):
+        app.dependency_overrides.pop(get_current_user, None)
+        yield
+        app.dependency_overrides.pop(get_current_user, None)
+
+    @pytest.mark.parametrize("path", PARTICIPANT_READ_ROUTES)
+    @patch("app.api.v1.participant_routes.get_event_participants")
+    @patch("app.core.dependencies.supabase")
+    def test_forged_token_is_rejected(self, mock_sb, mock_get_participants, path):
+        mock_sb.auth.get_user.side_effect = Exception("invalid JWT signature")
+
+        res = TestClient(app).get(path, headers={"Authorization": f"Bearer {FORGED_JWT}"})
+
+        assert res.status_code == 401
+        mock_sb.auth.get_user.assert_called_once_with(FORGED_JWT)
+        mock_get_participants.assert_not_called()
+
+    @pytest.mark.parametrize("path", PARTICIPANT_READ_ROUTES)
+    @patch("app.api.v1.participant_routes.get_event_participants")
+    @patch("app.core.dependencies.supabase")
+    def test_token_without_user_is_rejected(self, mock_sb, mock_get_participants, path):
+        mock_sb.auth.get_user.return_value = SimpleNamespace(user=None)
+
+        res = TestClient(app).get(path, headers={"Authorization": f"Bearer {FORGED_JWT}"})
+
+        assert res.status_code == 401
+        mock_get_participants.assert_not_called()
+
+    @pytest.mark.parametrize("path", PARTICIPANT_READ_ROUTES)
+    @patch("app.api.v1.participant_routes.get_event_participants")
+    def test_missing_token_is_rejected(self, mock_get_participants, path):
+        res = TestClient(app).get(path)
+
+        assert res.status_code in (401, 403)
+        mock_get_participants.assert_not_called()
+
+    @patch("app.api.v1.participant_routes.get_event_participants")
+    @patch("app.core.dependencies.supabase")
+    def test_verified_token_returns_participants(self, mock_sb, mock_get_participants):
+        mock_sb.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="u1"))
+        mock_get_participants.return_value = [{"user_id": "u2"}, {"user_id": "u3"}]
+        headers = {"Authorization": "Bearer valid-token"}
+        c = TestClient(app)
+
+        assert c.get("/api/participants/e1/participants", headers=headers).status_code == 200
+        count = c.get("/api/participants/e1/participants/count", headers=headers)
+        assert count.status_code == 200
+        assert count.json() == {"event_id": "e1", "count": 2}
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Schemas: UserSummary shape and ChatMessageResponse.sender
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -151,6 +221,12 @@ class TestChatUpdateMessageRouteRealPath:
 # ────────────────────────────────────────────────────────────────────────────
 
 class TestParticipantsRouteRealPath:
+    @pytest.fixture(autouse=True)
+    def _auth(self):
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="viewer")
+        yield
+        app.dependency_overrides.pop(get_current_user, None)
+
     def test_get_participants_response_includes_user_summary_and_profiles(self):
         chain = MagicMock()
         chain.select.return_value = chain
