@@ -71,8 +71,13 @@ Create a `.env` file:
 
 SUPABASE_URL=your_project_url
 SUPABASE_SERVICE_KEY=your_service_role_key
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3.8-flash
 
 ```
+
+Keep `GEMINI_API_KEY` secret and configure it in the deployment environment as well as locally.
+The assistant uses Gemini through Google's OpenAI-compatible API; it has no event tools or database access.
 
 ### 4. Run the Server
 

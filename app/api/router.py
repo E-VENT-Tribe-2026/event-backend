@@ -9,6 +9,7 @@ from app.api.v1 import (
     recommendation_routes,
     chat_routes,
     reminder_routes,
+    assistant_routes,
     friendship_routes,
     admin_routes,
 )
@@ -73,6 +74,12 @@ api_router.include_router(
     chat_routes.router,
     prefix="/chats",
     tags=["Chats"]
+)
+
+api_router.include_router(
+    assistant_routes.router,
+    prefix="/assistant",
+    tags=["AI Assistant"]
 )
 
 api_router.include_router(

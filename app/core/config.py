@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     # Optional extras
     MXBAI_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.8-flash"
 
     # Email / SMTP settings
     SMTP_HOST: str = "smtp.gmail.com"
