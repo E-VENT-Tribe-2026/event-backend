@@ -56,7 +56,7 @@ if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY]):
     supabase = None
 else:
     supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
 @router.post("/register")
@@ -93,8 +93,8 @@ def get_profile(request: Request, user=Depends(get_current_user)):
             if profile.data:
                 username = profile.data.get("username")
                 role = profile.data.get("role")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error fetching profile for user {user.id} in /api/auth/me: {e}")
     return {
         "id": user.id,
         "email": user.email,
