@@ -2,6 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from app.core.dependencies import get_current_user, get_current_onboarded_user
+from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
 from fastapi import HTTPException
 from app.services import event_service
@@ -65,11 +66,11 @@ def get_all_my_events(user=Depends(get_current_onboarded_user)):
 def get_events(
     page: int = Query(1),
     limit: int = Query(10),
-    category: str | None = None,
+    category: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     upcoming: bool = False,
-    search: str | None = None,
+    search: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     date: str | None = None,
-    city: str | None = None,
+    city: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
 ):
     result = list_events(page, limit, category, upcoming, search, date, city)
     attach_organizers(result.get("data") or [])

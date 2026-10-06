@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.utils.query_safety import like_contains
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,9 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
         count="exact"
     )
 
-    if search and search.strip():
-        term = search.strip()
-        query = query.ilike("username", f"%{term}%")
+    pattern = like_contains(search) if search else None
+    if pattern:
+        query = query.ilike("username", pattern)
 
     res = (
         query
@@ -171,8 +172,9 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
         query = query.neq("status", "cancelled").lt("start_datetime", now_iso)
     # "all" does not filter by status or date
 
-    if search and search.strip():
-        query = query.ilike("title", f"%{search.strip()}%")
+    pattern = like_contains(search) if search else None
+    if pattern:
+        query = query.ilike("title", pattern)
 
     if filter_norm == "upcoming":
         query = query.order("start_datetime", desc=False)

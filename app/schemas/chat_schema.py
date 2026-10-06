@@ -1,19 +1,35 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 
+from app.core.input_limits import CHAT_MESSAGE_MIN_LENGTH, CHAT_MESSAGE_MAX_LENGTH
 from app.schemas.profile_schema import UserSummary
+from app.utils.schema_validators import validate_text_value
+
+
+def _validate_message_content(v):
+    return validate_text_value(
+        v,
+        field_label="Message",
+        min_length=CHAT_MESSAGE_MIN_LENGTH,
+        max_length=CHAT_MESSAGE_MAX_LENGTH,
+    )
 
 
 class ChatMessageCreate(BaseModel):
     """Payload for sending a new chat message in an event."""
     content: str = Field(
         ...,
-        min_length=1,
-        max_length=2000,
+        min_length=CHAT_MESSAGE_MIN_LENGTH,
+        max_length=CHAT_MESSAGE_MAX_LENGTH,
         description="The text content of the message (max 2000 characters).",
         examples=["Hey everyone, can't wait for this event! 🎉"],
     )
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def validate_content(cls, v):
+        return _validate_message_content(v)
 
     model_config = {
         "json_schema_extra": {
@@ -28,11 +44,16 @@ class ChatMessageUpdate(BaseModel):
     """Payload for editing an existing chat message."""
     content: str = Field(
         ...,
-        min_length=1,
-        max_length=2000,
+        min_length=CHAT_MESSAGE_MIN_LENGTH,
+        max_length=CHAT_MESSAGE_MAX_LENGTH,
         description="The updated text content of the message.",
         examples=["Updated: see you all at the entrance at 6 PM!"],
     )
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def validate_content(cls, v):
+        return _validate_message_content(v)
 
     model_config = {
         "json_schema_extra": {
@@ -41,7 +62,6 @@ class ChatMessageUpdate(BaseModel):
             }
         }
     }
-
 
 class ChatMessageResponse(BaseModel):
     """Shape of a chat message returned from the API."""
