@@ -1,32 +1,41 @@
 import logging
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from openai import OpenAI
 
 from app.core.config import settings
 from app.schemas.assistant_schema import AssistantMessage
+from app.agents.graph import create_agent_graph
+from app.agents.guardian import GuardianAgent, GUARDIAN_PROMPT
+from app.agents.main_agent import MAIN_AGENT_PROMPT
+from app.agents.state import AgentState
 
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 logger = logging.getLogger(__name__)
-SYSTEM_PROMPT = (
-    "You are the E-VENT product orientation assistant. Help users understand "
-    "how to use the product. You do not have access to live event listings, "
-    "account data, or the ability to create or modify events. Do not claim to "
-    "have looked up or changed anything. If asked for live or account-specific "
-    "information, explain this limitation and suggest where the user can find it."
-)
+
+# Re-export for compatibility
+SYSTEM_PROMPT = MAIN_AGENT_PROMPT
+
+_COMPILED_GRAPH = None
 
 
-def generate_reply(messages: list[AssistantMessage]) -> str:
+def get_agent_graph():
+    """Lazily initialize and return the compiled LangGraph workflow."""
+    global _COMPILED_GRAPH
+    if _COMPILED_GRAPH is None:
+        _COMPILED_GRAPH = create_agent_graph()
+    return _COMPILED_GRAPH
+
+
+def call_llm(messages: list[dict[str, str]]) -> str:
+    """Invoke the LLM provider via OpenAI compatibility layer."""
     if not settings.GEMINI_API_KEY:
         raise HTTPException(
             status_code=503,
             detail="AI assistant is not configured.",
         )
-
-    provider_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    provider_messages.extend(message.model_dump() for message in messages)
 
     try:
         client = OpenAI(
@@ -37,12 +46,13 @@ def generate_reply(messages: list[AssistantMessage]) -> str:
         )
         response = client.chat.completions.create(
             model=settings.GEMINI_MODEL,
-            messages=provider_messages,
+            messages=messages,
         )
         reply = response.choices[0].message.content
         if not isinstance(reply, str) or not reply.strip():
             raise ValueError("Provider returned an empty response")
         return reply.strip()
+
     except Exception as exc:
         logger.error(
             "Gemini request failed (type=%s, status=%s)",
@@ -53,3 +63,29 @@ def generate_reply(messages: list[AssistantMessage]) -> str:
             status_code=502,
             detail="AI assistant is temporarily unavailable.",
         ) from None
+
+
+def run_agent_workflow(messages: list[dict[str, str]], user_id: Optional[str] = None) -> AgentState:
+    """Execute the multi-turn 2-agent LangGraph workflow."""
+    graph = get_agent_graph()
+    initial_state: AgentState = {
+        "messages": messages,
+        "user_id": user_id,
+        "entity_slots": {},
+        "input_guard_passed": False,
+        "output_guard_passed": False,
+    }
+    return graph.invoke(initial_state)
+
+
+def generate_reply(messages: list[AssistantMessage]) -> str:
+    """Generate assistant reply using the 2-agent LangGraph pipeline."""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="AI assistant is not configured.",
+        )
+
+    raw_messages = [message.model_dump() for message in messages]
+    result_state = run_agent_workflow(raw_messages)
+    return result_state.get("reply", "")
