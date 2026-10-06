@@ -128,15 +128,65 @@ def login_user(email: str, password: str):
         })
 
         if response.session is None:
+            logger.warning("login_user: sign-in succeeded but session is None (likely unconfirmed email) for email=%s", email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Email not confirmed. Please check your inbox."
+                detail="Login failed. Please check your credentials."
             )
 
-        return {
+        user_id = response.user.id
+        role = None
+        try:
+            profile_res = (
+                supabase.table("profiles")
+                .select("role")
+                .eq("id", user_id)
+                .single()
+                .execute()
+            )
+            role = (profile_res.data or {}).get("role")
+        except Exception as e:
+            logger.warning(f"Could not fetch profile role for user {user_id}: {e}")
+
+        is_admin = (role == "administrator")
+        if not is_admin:
+            return {
+                "access_token": response.session.access_token,
+                "token_type": "bearer",
+                "role": role,
+                "is_admin": False,
+                "has_mfa_linked": False,
+                "is_verified": True,
+            }
+
+        # Administrator account: check if TOTP factor is linked
+        has_mfa_linked = False
+        factor_id = None
+        try:
+            factors = get_user_factors(user_id)
+            for f in factors:
+                f_type = f.get("factor_type") if isinstance(f, dict) else getattr(f, "factor_type", None)
+                f_status = f.get("status") if isinstance(f, dict) else getattr(f, "status", None)
+                f_id = f.get("id") if isinstance(f, dict) else getattr(f, "id", None)
+                if f_type == "totp" and f_status == "verified":
+                    has_mfa_linked = True
+                    factor_id = f_id
+                    break
+        except Exception as e:
+            logger.error(f"Error checking MFA factors for admin {user_id}: {e}")
+
+        result = {
             "access_token": response.session.access_token,
-            "token_type": "bearer"
+            "token_type": "bearer",
+            "role": "administrator",
+            "is_admin": True,
+            "has_mfa_linked": has_mfa_linked,
+            "is_verified": False,
         }
+        if factor_id:
+            result["factor_id"] = factor_id
+
+        return result
 
     except AuthApiError as e:
         error = str(e).lower()
@@ -144,12 +194,13 @@ def login_user(email: str, password: str):
         if "invalid login credentials" in error:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password."
+                detail="Login failed. Please check your credentials."
             )
         if "email not confirmed" in error:
+            logger.warning("login_user: email not confirmed for email=%s", email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Email not confirmed. Please check your inbox."
+                detail="Login failed. Please check your credentials."
             )
         if "too many requests" in error:
             raise HTTPException(
@@ -352,3 +403,245 @@ def change_password(email: str, user_id: str, current_password: str, new_passwor
             )
         logger.error(f"change_password AuthApiError: {e}")
         raise HTTPException(status_code=400, detail="Password update failed. Please try again.")
+
+def get_user_factors(user_id: str) -> list:
+    """Retrieve all MFA factors for a user using the Supabase admin API."""
+    try:
+        from supabase import create_client
+        admin_client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SERVICE_KEY
+        )
+        res = admin_client.auth.admin.mfa.list_factors({"user_id": user_id})
+        return res.factors if hasattr(res, "factors") else []
+    except Exception as e:
+        logger.error(f"Failed to list MFA factors for user {user_id}: {e}")
+        return []
+
+
+def get_mfa_status(user_id: str, access_token: str) -> dict:
+    """Return whether the account is an administrator, has linked MFA, and if current sign-in is verified."""
+    import base64
+    import json
+
+    # 1. Fetch user role
+    role = None
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("role")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        role = (profile_res.data or {}).get("role")
+    except Exception as e:
+        logger.error(f"Failed to fetch profile role for user {user_id}: {e}")
+
+    is_admin = (role == "administrator")
+    if not is_admin:
+        return {
+            "role": role,
+            "is_admin": False,
+            "has_mfa_linked": False,
+            "is_verified": True,
+            "factor_id": None,
+        }
+
+    # 2. Check token AAL level for current sign-in verification
+    is_verified = False
+    try:
+        parts = access_token.split(".")
+        if len(parts) == 3:
+            padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(padded))
+            is_verified = (claims.get("aal") == "aal2")
+    except Exception as e:
+        logger.warning(f"Could not parse token claims for AAL check: {e}")
+
+    # 3. Check enrolled factors
+    has_mfa_linked = False
+    factor_id = None
+    try:
+        factors = get_user_factors(user_id)
+        for f in factors:
+            f_type = f.get("factor_type") if isinstance(f, dict) else getattr(f, "factor_type", None)
+            f_status = f.get("status") if isinstance(f, dict) else getattr(f, "status", None)
+            f_id = f.get("id") if isinstance(f, dict) else getattr(f, "id", None)
+            if f_type == "totp" and f_status == "verified":
+                has_mfa_linked = True
+                factor_id = f_id
+                break
+    except Exception as e:
+        logger.error(f"Error checking MFA factors for admin {user_id}: {e}")
+
+    return {
+        "role": "administrator",
+        "is_admin": True,
+        "has_mfa_linked": has_mfa_linked,
+        "is_verified": is_verified,
+        "factor_id": factor_id,
+    }
+
+
+def enroll_mfa(user_id: str, email: str, access_token: str) -> dict:
+    """Enroll a TOTP factor for an administrator account. Only administrator accounts can enroll."""
+    # 1. Enforce admin check
+    profile_res = (
+        supabase.table("profiles")
+        .select("role")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    role = (profile_res.data or {}).get("role")
+    if role != "administrator":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrator accounts can link an authenticator app."
+        )
+
+    import httpx
+    url = f"{settings.SUPABASE_URL}/auth/v1/factors"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+    body = {
+        "factor_type": "totp",
+        "issuer": "EventGit",
+        "friendly_name": email,
+    }
+
+    try:
+        resp = httpx.post(url, headers=headers, json=body, timeout=10.0)
+        if resp.status_code not in (200, 201):
+            logger.error(f"Supabase MFA enroll returned {resp.status_code}: {resp.text}")
+            detail = "Failed to enroll authenticator app. Please try again."
+            try:
+                err_json = resp.json()
+                if "msg" in err_json or "message" in err_json:
+                    detail = err_json.get("msg") or err_json.get("message")
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=resp.status_code if resp.status_code < 500 else 400,
+                detail=detail
+            )
+
+        data = resp.json()
+        qr_code = data.get("totp", {}).get("qr_code", "")
+        if qr_code and not qr_code.startswith("data:image"):
+            qr_code = f"data:image/svg+xml;utf-8,{qr_code}"
+            data["totp"]["qr_code"] = qr_code
+
+        return {
+            "factor_id": data.get("id"),
+            "totp": data.get("totp", {}),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in enroll_mfa: {e}")
+        raise HTTPException(status_code=500, detail="Failed to initiate authenticator linking.")
+
+
+def verify_mfa(user_id: str, access_token: str, code: str, factor_id: str | None = None) -> dict:
+    """
+    Check the code the administrator enters from the app.
+    When correct, verifies the factor/challenge, marks current sign-in as verified (elevating to AAL2),
+    and returns the new session access token. Refuses a wrong code with a reason.
+    Only administrator accounts can have codes checked.
+    """
+    # 1. Enforce admin check
+    profile_res = (
+        supabase.table("profiles")
+        .select("role")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    role = (profile_res.data or {}).get("role")
+    if role != "administrator":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrator accounts can verify authentication codes."
+        )
+
+    import httpx
+
+    # 2. If factor_id is not provided, look up the user's active/latest factor
+    target_factor_id = factor_id
+    if not target_factor_id:
+        try:
+            factors = get_user_factors(user_id)
+            for f in factors:
+                f_type = f.get("factor_type") if isinstance(f, dict) else getattr(f, "factor_type", None)
+                f_id = f.get("id") if isinstance(f, dict) else getattr(f, "id", None)
+                if f_type == "totp":
+                    target_factor_id = f_id
+                    break
+        except Exception as e:
+            logger.error(f"Failed to find factor for user {user_id}: {e}")
+
+    if not target_factor_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No authenticator factor found for account. Please link an authenticator app first."
+        )
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+
+    # 3. Create a challenge
+    challenge_url = f"{settings.SUPABASE_URL}/auth/v1/factors/{target_factor_id}/challenge"
+    try:
+        challenge_resp = httpx.post(challenge_url, headers=headers, json={}, timeout=10.0)
+        if challenge_resp.status_code not in (200, 201):
+            logger.error(f"Supabase MFA challenge returned {challenge_resp.status_code}: {challenge_resp.text}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create verification challenge. Please try again."
+            )
+        challenge_id = challenge_resp.json().get("id")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error creating MFA challenge: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create verification challenge.")
+
+    # 4. Verify code against the challenge
+    verify_url = f"{settings.SUPABASE_URL}/auth/v1/factors/{target_factor_id}/verify"
+    verify_body = {
+        "challenge_id": challenge_id,
+        "code": code.strip(),
+    }
+    try:
+        verify_resp = httpx.post(verify_url, headers=headers, json=verify_body, timeout=10.0)
+        if verify_resp.status_code not in (200, 201):
+            logger.warning(f"Supabase MFA verify failed with status {verify_resp.status_code}: {verify_resp.text}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid verification code. Please check your authenticator app and try again."
+            )
+
+        data = verify_resp.json()
+        new_access_token = data.get("access_token")
+        if not new_access_token:
+            raise HTTPException(status_code=500, detail="MFA verification succeeded but no access token returned.")
+
+        return {
+            "access_token": new_access_token,
+            "token_type": "bearer",
+            "is_verified": True,
+            "message": "Sign-in successfully verified.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in verify_mfa: {e}")
+        raise HTTPException(status_code=500, detail="Verification failed due to a server error.")

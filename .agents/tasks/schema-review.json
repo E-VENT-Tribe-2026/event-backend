@@ -1,0 +1,20 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "id": "upload-photo-exception-leakage",
+      "severity": "minor",
+      "confidence": "possible",
+      "summary": "`upload-photo` exception leakage",
+      "detail": "POST /profile/upload-photo re-raises HTTPException(status_code=500, detail=str(e)) for unexpected exceptions, potentially exposing Supabase SDK internals or file-system paths to the client. Replace with a generic message and log the original exception server-side."
+    },
+    {
+      "id": "missing-boundary-value-tests",
+      "severity": "minor",
+      "confidence": "confirmed",
+      "summary": "Missing boundary-value tests for username/full_name length",
+      "detail": "No test exercises a username of exactly 3 or 20 characters, nor a full_name of exactly 3 or 50 characters. The {3,20} quantifier and the 3 <= len(stripped) <= 50 check are inclusive boundaries; off-by-one errors would go undetected. Add four parameterised cases."
+    }
+  ],
+  "reviewDoc": "c:\\Users\\User\\Desktop\\event-backend\\.agents\\tasks\\schema-review.md"
+}

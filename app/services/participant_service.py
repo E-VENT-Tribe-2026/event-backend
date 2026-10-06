@@ -60,6 +60,9 @@ def _join_side_effects(user_id: str, event_id: str, event: dict):
 def join_event(user_id: str, event_id: str):
     event = get_event(event_id)
 
+    if event.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot join a cancelled event")
+
     existing = (
         supabase.table("event_participants")
         .select("user_id")
@@ -82,6 +85,10 @@ def join_event(user_id: str, event_id: str):
 
 def leave_event(user_id: str, event_id: str):
     event = get_event(event_id)
+
+    if event.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot leave a cancelled event")
+
     title = event.get("title", "Event")
 
     response = (
@@ -123,6 +130,9 @@ def _leave_side_effects(user_id: str, event_id: str, event: dict):
 
 def remove_participant(organizer_id: str, event_id: str, participant_id: str):
     event = get_event(event_id)
+
+    if event.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot remove participants from a cancelled event")
 
     if event["created_by"] != organizer_id:
         raise HTTPException(status_code=403, detail="Only the event owner can remove participants")

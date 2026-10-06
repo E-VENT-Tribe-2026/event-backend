@@ -4,10 +4,28 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, EmailStr
 from supabase import create_client, Client
 
-from app.schemas.auth_schema import RegisterRequest, LoginRequest, ChangePasswordRequest, ChooseUsernameRequest
-from app.services.auth_service import register_user, login_user, request_password_reset, verify_reset_token, change_password
+from app.schemas.auth_schema import (
+    RegisterRequest,
+    LoginRequest,
+    ChangePasswordRequest,
+    ChooseUsernameRequest,
+    MFAVerifyRequest,
+    MFAVerifyResponse,
+    MFAEnrollResponse,
+    MFAStatusResponse,
+)
+from app.services.auth_service import (
+    register_user,
+    login_user,
+    request_password_reset,
+    verify_reset_token,
+    change_password,
+    enroll_mfa,
+    verify_mfa,
+    get_mfa_status,
+)
 from app.services.auth_service import reset_password as reset_user_password
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user, security
 from app.core.limiter import limiter
 import httpx
 
@@ -68,18 +86,81 @@ def login(request: Request, data: LoginRequest):
 @limiter.limit("60/minute")
 def get_profile(request: Request, user=Depends(get_current_user)):
     username = None
+    role = None
     if supabase:
         try:
-            profile = supabase.table("profiles").select("username").eq("id", user.id).single().execute()
+            profile = supabase.table("profiles").select("username, role").eq("id", user.id).single().execute()
             if profile.data:
                 username = profile.data.get("username")
+                role = profile.data.get("role")
         except Exception:
             pass
     return {
         "id": user.id,
         "email": user.email,
         "username": username,
+        "role": role,
     }
+
+
+@router.get("/mfa/status")
+@limiter.limit("60/minute")
+def mfa_status(
+    request: Request,
+    credentials=Depends(security),
+    user=Depends(get_current_user)
+):
+    """
+    Check if the account holds the administrator role, whether an authenticator app
+    has been linked, and whether the current sign-in has been verified.
+    Works for both email/password sign-in and Google sign-in.
+    """
+    return get_mfa_status(
+        user_id=user.id,
+        access_token=credentials.credentials
+    )
+
+
+@router.post("/mfa/enroll")
+@limiter.limit("10/minute")
+def mfa_enroll(
+    request: Request,
+    credentials=Depends(security),
+    user=Depends(get_current_user)
+):
+    """
+    Let an administrator account link an authenticator app to their account
+    the first time they sign in as an administrator.
+    Returns factor details and QR code SVG to scan.
+    Only administrator accounts can link an app.
+    """
+    return enroll_mfa(
+        user_id=user.id,
+        email=user.email or "",
+        access_token=credentials.credentials
+    )
+
+
+@router.post("/mfa/verify")
+@limiter.limit("15/minute")
+def mfa_verify(
+    request: Request,
+    payload: MFAVerifyRequest,
+    credentials=Depends(security),
+    user=Depends(get_current_user)
+):
+    """
+    Check the code the administrator enters from the authenticator app.
+    When correct, marks the current sign-in as verified (AAL2) and returns
+    the upgraded access token. Refuses wrong codes with a clear reason.
+    Only administrator accounts can have codes checked.
+    """
+    return verify_mfa(
+        user_id=user.id,
+        access_token=credentials.credentials,
+        code=payload.code,
+        factor_id=payload.factor_id
+    )
 
 
 @router.post("/choose-username")
@@ -111,7 +192,7 @@ def update_user_password(request: Request, payload: ResetPasswordPayload):
 
 @router.post("/change-password")
 @limiter.limit("5/minute")
-def change_user_password(request: Request, data: ChangePasswordRequest, user=Depends(get_current_user)):
+def change_user_password(request: Request, data: ChangePasswordRequest, user=Depends(get_current_onboarded_user)):
     return change_password(
         email=user.email,
         user_id=user.id,

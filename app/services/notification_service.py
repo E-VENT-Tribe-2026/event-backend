@@ -1,8 +1,15 @@
 from datetime import datetime, timezone
 from app.db.supabase_client import supabase
+from app.services.profile_service import get_user_summaries
 
 
-def create_notification(user_id: str, event_id: str, type_: str, message: str):
+def create_notification(
+    user_id: str,
+    event_id: str | None,
+    type_: str,
+    message: str,
+    related_user_id: str | None = None,
+):
     payload = {
         "user_id": user_id,
         "event_id": event_id,
@@ -11,13 +18,20 @@ def create_notification(user_id: str, event_id: str, type_: str, message: str):
         "is_read": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    if related_user_id is not None:
+        payload["related_user_id"] = related_user_id
 
-    existing = supabase.table("notifications") \
+    dedupe = supabase.table("notifications") \
         .select("created_at") \
-        .eq("user_id", user_id) \
-        .eq("event_id", event_id) \
-        .eq("type", type_) \
-        .eq("message", message) \
+        .eq("user_id", user_id)
+    if event_id is None:
+        dedupe = dedupe.is_("event_id", "null")
+    else:
+        dedupe = dedupe.eq("event_id", event_id)
+    dedupe = dedupe.eq("type", type_).eq("message", message)
+    if related_user_id is not None:
+        dedupe = dedupe.eq("related_user_id", related_user_id)
+    existing = dedupe \
         .order("created_at", desc=True) \
         .limit(1) \
         .execute()
@@ -58,11 +72,29 @@ def get_notifications(user_id: str, page: int = 1, limit: int = 10):
         .range(start, end) \
         .execute()
 
+    rows = response.data or []
+    related_ids = [r["related_user_id"] for r in rows if r.get("related_user_id")]
+    summaries = get_user_summaries(related_ids) if related_ids else {}
+    for row in rows:
+        rid = row.get("related_user_id")
+        row["related_user"] = summaries.get(rid) if rid else None
+
     return {
         "page": page,
         "limit": limit,
-        "data": response.data
+        "data": rows
     }
+
+
+def delete_notifications_for(user_id: str, type_: str, related_user_id: str):
+    """Delete a user's notifications of one type that relate to a given other user."""
+    response = supabase.table("notifications") \
+        .delete() \
+        .eq("user_id", user_id) \
+        .eq("type", type_) \
+        .eq("related_user_id", related_user_id) \
+        .execute()
+    return response.data or []
 
 
 def mark_as_read(notification_id: int, user_id: str):

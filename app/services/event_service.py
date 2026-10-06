@@ -269,6 +269,15 @@ def update_event(user_id: str, event_id: str, update_data: dict):
             detail="Not authorized to update this event"
         )
 
+    if event.get("status") == "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit a cancelled event"
+        )
+
+    # Disallow reviving or directly modifying event status via update
+    update_data.pop("status", None)
+
     # Regenerate embedding if needed
     if "title" in update_data or "description" in update_data or "category" in update_data:
         title = update_data.get("title", event.get("title", ""))
@@ -311,32 +320,82 @@ def update_event(user_id: str, event_id: str, update_data: dict):
     return response.data[0], event, updated_event
 
 def delete_event(user_id: str, event_id: str):
-    event = get_event(event_id)
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Events cannot be deleted; cancel the event instead."
+    )
 
-    if event["created_by"] != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this event"
-        )
 
-    participants = supabase.table("event_participants") \
-        .select("user_id") \
-        .eq("event_id", event_id) \
+# Profile events intentionally share the /api/events (list_events) column set.
+PROFILE_EVENT_COLUMNS = (
+    "id, title, description, category, cost, max_capacity, status, start_datetime, "
+    "end_datetime, location_name, latitude, longitude, created_by, created_at, updated_at"
+)
+PROFILE_EVENTS_GROUP_LIMIT = 50
+
+
+def _parse_start(value):
+    """Parse an ISO start_datetime into an aware datetime, or None if missing/invalid."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _split_profile_events(events: list) -> dict:
+    now = datetime.now(timezone.utc)
+    upcoming, past, past_undated = [], [], []
+    for event in events:
+        if event.get("status") == "cancelled":
+            continue
+        start = _parse_start(event.get("start_datetime"))
+        if start is None:
+            past_undated.append(event)
+        elif start > now:
+            upcoming.append((start, event))
+        else:
+            past.append((start, event))
+    upcoming.sort(key=lambda pair: pair[0])
+    past.sort(key=lambda pair: pair[0], reverse=True)
+    past_events = [e for _, e in past] + past_undated
+    return {
+        "upcoming": [e for _, e in upcoming][:PROFILE_EVENTS_GROUP_LIMIT],
+        "past": past_events[:PROFILE_EVENTS_GROUP_LIMIT],
+    }
+
+
+def get_profile_events(user_id: str):
+    """Events a user organized and events they joined, each split into upcoming and past."""
+    organized_resp = (
+        supabase.table("events")
+        .select(PROFILE_EVENT_COLUMNS)
+        .eq("created_by", user_id)
         .execute()
-    
-    delete_response = supabase.table("events").delete().eq("id", event_id).execute()
-    if delete_response.data:
-        # Send cancellation emails before notifying
-        _email_participants(event, "cancellation")
-        username = get_username(user_id)
-        for p in participants.data:
-            create_notification(
-                p["user_id"],
-                event_id,
-                "event_deleted",
-                f"Event '{event['title']}' was deleted by {username}"
-            )
-    return {"message": "Event deleted successfully"}
+    )
+    organized = organized_resp.data or []
+
+    joined_resp = (
+        supabase.table("event_participants")
+        .select(f"event_id, events({PROFILE_EVENT_COLUMNS})")
+        .eq("user_id", user_id)
+        .eq("status", "going")
+        .execute()
+    )
+    joined = [r["events"] for r in (joined_resp.data or []) if r.get("events")]
+    joined = [e for e in joined if e.get("created_by") != user_id]
+
+    return {
+        "organized": _split_profile_events(organized),
+        "joined": _split_profile_events(joined),
+    }
 
 
 def get_all_events_by_user(user_id: str):
@@ -405,11 +464,7 @@ def list_events(
             }
 
     # Otherwise standard filtered query
-    query = supabase.table("events").select(
-        "id, title, description, category, cost, max_capacity, status, "
-        "start_datetime, end_datetime, location_name, latitude, longitude, "
-        "created_by, created_at, updated_at"
-    )
+    query = supabase.table("events").select(PROFILE_EVENT_COLUMNS)
 
     query = query.eq("status", "active")
     query = query.gte("end_datetime", now)
@@ -443,32 +498,34 @@ def cancel_event(user_id: str, event_id: str):
     if event["created_by"] != user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    if event.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Event is already cancelled")
+
+    start = _parse_start(event.get("start_datetime"))
+    if start is None or start <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Only upcoming events can be cancelled")
+
     # mark cancelled
     supabase.table("events") \
-        .update({"status": "cancelled"}) \
+        .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}) \
         .eq("id", event_id) \
         .execute()
 
-    # remove participants
+    # fetch participants to notify them (organizer and participants remain linked)
     participants = supabase.table("event_participants") \
         .select("user_id") \
         .eq("event_id", event_id) \
         .execute()
 
-    # Send cancellation emails before removing participants
+    # Send cancellation emails
     _email_participants(event, "cancellation")
-
-    supabase.table("event_participants") \
-        .delete() \
-        .eq("event_id", event_id) \
-        .execute()
 
     # notify
     from app.services.notification_service import create_notification
     
     username = get_username(user_id)
 
-    for p in participants.data:
+    for p in (participants.data or []):
         create_notification(
             p["user_id"],
             event_id,

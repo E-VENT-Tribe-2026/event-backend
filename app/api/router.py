@@ -1,5 +1,18 @@
 from fastapi import APIRouter
-from app.api.v1 import auth_routes, event_routes, profile_routes, saved_event_routes, notification_routes, participant_routes, recommendation_routes, chat_routes, reminder_routes, assistant_routes
+from app.api.v1 import (
+    auth_routes,
+    event_routes,
+    profile_routes,
+    saved_event_routes,
+    notification_routes,
+    participant_routes,
+    recommendation_routes,
+    chat_routes,
+    reminder_routes,
+    assistant_routes,
+    friendship_routes,
+    admin_routes,
+)
 
 api_router = APIRouter()
 
@@ -13,6 +26,12 @@ api_router.include_router(
     auth_routes.router,
     prefix="/auth",
     tags=["Authentication"]
+)
+
+api_router.include_router(
+    admin_routes.router,
+    prefix="/admin",
+    tags=["Admin"]
 )
 
 api_router.include_router(
@@ -67,4 +86,10 @@ api_router.include_router(
     reminder_routes.router,
     prefix="/reminders",
     tags=["Reminders"]
+)
+
+api_router.include_router(
+    friendship_routes.router,
+    prefix="/friends",
+    tags=["Friends"]
 )

@@ -157,3 +157,142 @@ class TestDeleteSelected:
         chain.delete.assert_called_once()
         chain.eq.assert_called_once_with("user_id", "u1")
         chain.in_.assert_called_once_with("id", [1, 2, 3])
+
+def _dedupe_chain(existing=None):
+    chain = MagicMock()
+    for name in ("select", "eq", "is_", "order", "limit", "insert"):
+        getattr(chain, name).return_value = chain
+    chain.execute.return_value = MagicMock(data=existing or [])
+    return chain
+
+
+class TestCreateNotificationRelatedUser:
+    @patch("app.services.notification_service.supabase")
+    def test_null_event_id_dedupe_uses_is_null(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", None, "friend_request_received", "hi")
+
+        chain.is_.assert_called_once_with("event_id", "null")
+        for c in chain.eq.call_args_list:
+            assert c != call("event_id", None)
+            assert c.args[0] != "event_id"
+
+    @patch("app.services.notification_service.supabase")
+    def test_event_id_dedupe_uses_eq(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", "e1", "event_updated", "hi")
+
+        chain.eq.assert_any_call("event_id", "e1")
+        chain.is_.assert_not_called()
+
+    @patch("app.services.notification_service.supabase")
+    def test_related_user_id_in_payload_and_dedupe(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", None, "friend_request_received", "hi", related_user_id="u9")
+
+        payload = chain.insert.call_args[0][0]
+        assert payload["related_user_id"] == "u9"
+        chain.eq.assert_any_call("related_user_id", "u9")
+
+    @patch("app.services.notification_service.supabase")
+    def test_no_related_user_id_key_when_not_given(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", "e1", "event_updated", "hi")
+
+        payload = chain.insert.call_args[0][0]
+        assert "related_user_id" not in payload
+        for c in chain.eq.call_args_list:
+            assert c.args[0] != "related_user_id"
+
+
+class TestDeleteNotificationsFor:
+    @patch("app.services.notification_service.supabase")
+    def test_deletes_with_filters_and_returns_data(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.delete.return_value = chain
+        chain.eq.return_value = chain
+        rows = [{"id": 1}]
+        chain.execute.return_value = MagicMock(data=rows)
+
+        from app.services.notification_service import delete_notifications_for
+        result = delete_notifications_for("u1", "friend_request_received", "u2")
+
+        mock_sb.table.assert_called_with("notifications")
+        chain.delete.assert_called_once()
+        assert chain.eq.call_args_list == [
+            call("user_id", "u1"),
+            call("type", "friend_request_received"),
+            call("related_user_id", "u2"),
+        ]
+        assert result == rows
+
+    @patch("app.services.notification_service.supabase")
+    def test_returns_empty_list_when_data_none(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.delete.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=None)
+
+        from app.services.notification_service import delete_notifications_for
+        assert delete_notifications_for("u1", "t", "u2") == []
+
+
+class TestGetNotificationsRelatedUser:
+    def _chain(self, rows):
+        chain = MagicMock()
+        for name in ("select", "eq", "order", "range"):
+            getattr(chain, name).return_value = chain
+        chain.execute.return_value = MagicMock(data=rows)
+        return chain
+
+    @patch("app.services.notification_service.get_user_summaries")
+    @patch("app.services.notification_service.supabase")
+    def test_attaches_related_user_with_single_lookup(self, mock_sb, mock_summaries):
+        rows = [
+            {"id": 1, "related_user_id": "u2"},
+            {"id": 2, "related_user_id": None},
+            {"id": 3, "related_user_id": "u3"},
+            {"id": 4},
+        ]
+        mock_sb.table.return_value = self._chain(rows)
+        mock_summaries.return_value = {"u2": {"id": "u2"}, "u3": {"id": "u3"}}
+
+        from app.services.notification_service import get_notifications
+        result = get_notifications("u1", page=1, limit=10)
+
+        mock_summaries.assert_called_once()
+        assert set(mock_summaries.call_args[0][0]) == {"u2", "u3"}
+        by_id = {r["id"]: r for r in result["data"]}
+        assert by_id[1]["related_user"] == {"id": "u2"}
+        assert by_id[3]["related_user"] == {"id": "u3"}
+        assert by_id[2]["related_user"] is None
+        assert by_id[4]["related_user"] is None
+        assert set(result.keys()) == {"page", "limit", "data"}
+
+    @patch("app.services.notification_service.get_user_summaries")
+    @patch("app.services.notification_service.supabase")
+    def test_no_lookup_when_no_related_users(self, mock_sb, mock_summaries):
+        rows = [{"id": 1, "related_user_id": None}, {"id": 2}]
+        mock_sb.table.return_value = self._chain(rows)
+
+        from app.services.notification_service import get_notifications
+        result = get_notifications("u1")
+
+        mock_summaries.assert_not_called()
+        assert all(r["related_user"] is None for r in result["data"])
+        assert result["page"] == 1
+        assert result["limit"] == 10

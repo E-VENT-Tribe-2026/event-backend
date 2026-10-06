@@ -299,3 +299,46 @@ class TestUpdateMessage:
             with pytest.raises(HTTPException) as exc:
                 update_message("u1", 5, "new")
             assert exc.value.status_code == 403
+
+
+class TestCancelledEventChatRestrictions:
+    def test_send_message_in_cancelled_event_raises_400(self):
+        mock_sb, chains = make_table_router()
+        chains["event_participants"].execute.return_value = MagicMock(data=[{"user_id": "u1"}])
+        chains["events"].execute.return_value = MagicMock(data={"status": "cancelled"})
+
+        with patch("app.services.chat_service.supabase", mock_sb):
+            from app.services.chat_service import send_message
+            with pytest.raises(HTTPException) as exc:
+                send_message("u1", "e1", "hello")
+            assert exc.value.status_code == 400
+            assert "read-only" in exc.value.detail.lower()
+
+    def test_update_message_in_cancelled_event_raises_400(self):
+        mock_sb, chains = make_table_router()
+        chains["event_chats"].execute.return_value = MagicMock(
+            data={"id": 5, "event_id": "e1", "sender_id": "u1", "content": "old"}
+        )
+        chains["events"].execute.return_value = MagicMock(data={"status": "cancelled"})
+
+        with patch("app.services.chat_service.supabase", mock_sb):
+            from app.services.chat_service import update_message
+            with pytest.raises(HTTPException) as exc:
+                update_message("u1", 5, "new")
+            assert exc.value.status_code == 400
+            assert "read-only" in exc.value.detail.lower()
+
+    def test_delete_message_in_cancelled_event_raises_400(self):
+        mock_sb, chains = make_table_router()
+        chains["event_chats"].execute.return_value = MagicMock(
+            data={"id": 5, "event_id": "e1", "sender_id": "u1", "content": "old"}
+        )
+        chains["events"].execute.return_value = MagicMock(data={"status": "cancelled"})
+
+        with patch("app.services.chat_service.supabase", mock_sb):
+            from app.services.chat_service import delete_message
+            with pytest.raises(HTTPException) as exc:
+                delete_message("u1", 5)
+            assert exc.value.status_code == 400
+            assert "read-only" in exc.value.detail.lower()
+

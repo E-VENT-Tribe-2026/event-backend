@@ -212,6 +212,23 @@ class TestUpdateEvent:
             update_event("other-user", "e1", {"title": "Hacked"})
         assert exc.value.status_code == 403
 
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    def test_update_cancelled_event_raises_400(self, mock_sb, mock_embed):
+        existing = {**self._existing_event(created_by="u1"), "status": "cancelled"}
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import update_event
+        with pytest.raises(HTTPException) as exc:
+            update_event("u1", "e1", {"title": "New Title"})
+        assert exc.value.status_code == 400
+        assert "cancelled" in exc.value.detail.lower()
+
     @patch("app.services.event_service.create_notification")
     @patch("app.services.event_service.generate_embedding", return_value=[0.5])
     @patch("app.services.event_service.supabase")
@@ -270,42 +287,12 @@ class TestUpdateEvent:
 # ──────────────────────────────────────────────
 
 class TestDeleteEvent:
-    @patch("app.services.event_service.get_username", return_value="john")
-    @patch("app.services.event_service.supabase")
-    def test_delete_success(self, mock_sb, mock_get_username):
-        existing = {"id": "e1", "created_by": "u1"}
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.delete.return_value = chain
-        chain.eq.return_value = chain
-        chain.gte.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.side_effect = [
-            MagicMock(data=existing),
-            MagicMock(data=[{"user_id": "u2"}]), # Add this mock response for the participants fetch
-            MagicMock(data=[]),
-        ]
-
-        from app.services.event_service import delete_event
-        result = delete_event("u1", "e1")
-
-        assert result["message"] == "Event deleted successfully"
-
-    @patch("app.services.event_service.supabase")
-    def test_delete_by_non_owner_raises_403(self, mock_sb):
-        existing = {"id": "e1", "created_by": "u1"}
-        chain = MagicMock()
-        mock_sb.table.return_value = chain
-        chain.select.return_value = chain
-        chain.eq.return_value = chain
-        chain.single.return_value = chain
-        chain.execute.return_value = MagicMock(data=existing)
-
+    def test_delete_is_refused(self):
         from app.services.event_service import delete_event
         with pytest.raises(HTTPException) as exc:
-            delete_event("intruder", "e1")
-        assert exc.value.status_code == 403
+            delete_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "cannot be deleted" in exc.value.detail.lower()
 
 
 # ──────────────────────────────────────────────
@@ -321,7 +308,13 @@ class TestCancelEvent:
         mock_notify.return_value = None
         mock_email.return_value = None
 
-        existing = {"id": "e1", "title": "Test Event", "created_by": "u1", "status": "active"}
+        existing = {
+            "id": "e1",
+            "title": "Test Event",
+            "created_by": "u1",
+            "status": "active",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
 
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -335,7 +328,6 @@ class TestCancelEvent:
             MagicMock(data=existing),            # 1. get_event
             MagicMock(data=[]),                  # 2. update status
             MagicMock(data=[{"user_id": "u2"}]), # 3. select participants
-            MagicMock(data=[]),                  # 4. delete participants
         ]
 
         from app.services.event_service import cancel_event
@@ -344,6 +336,70 @@ class TestCancelEvent:
         assert result["message"] == "Event cancelled"
         mock_notify.assert_called()
         mock_email.assert_called_once_with(existing, "cancellation")
+        # Ensure participants are NOT deleted
+        chain.delete.assert_not_called()
+
+    @patch("app.services.event_service.supabase")
+    def test_cancel_non_owner_raises_403(self, mock_sb):
+        existing = {
+            "id": "e1",
+            "created_by": "owner",
+            "status": "active",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import cancel_event
+        with pytest.raises(HTTPException) as exc:
+            cancel_event("intruder", "e1")
+        assert exc.value.status_code == 403
+
+    @patch("app.services.event_service.supabase")
+    def test_cancel_past_event_raises_400(self, mock_sb):
+        existing = {
+            "id": "e1",
+            "created_by": "u1",
+            "status": "active",
+            "start_datetime": "2000-01-01T10:00:00+00:00"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import cancel_event
+        with pytest.raises(HTTPException) as exc:
+            cancel_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "upcoming" in exc.value.detail.lower()
+
+    @patch("app.services.event_service.supabase")
+    def test_cancel_already_cancelled_raises_400(self, mock_sb):
+        existing = {
+            "id": "e1",
+            "created_by": "u1",
+            "status": "cancelled",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=existing)
+
+        from app.services.event_service import cancel_event
+        with pytest.raises(HTTPException) as exc:
+            cancel_event("u1", "e1")
+        assert exc.value.status_code == 400
+        assert "already cancelled" in exc.value.detail.lower()
 
 
 
@@ -543,33 +599,11 @@ def _stub_tables(mock_sb, chains):
 # ──────────────────────────────────────────────
 
 class TestDeleteEventNotifications:
-    @patch("app.services.event_service._email_participants")
-    @patch("app.services.event_service.create_notification")
-    @patch("app.services.event_service.get_username", return_value="john")
-    @patch("app.services.event_service.supabase")
-    @patch("app.services.event_service.get_event")
-    def test_notifies_participants_on_delete(self, mock_get_event, mock_sb, mock_get_username, mock_create_notification, mock_email):
-        mock_get_event.return_value = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
-
-        participants_chain = MagicMock()
-        participants_chain.select.return_value = participants_chain
-        participants_chain.eq.return_value = participants_chain
-        participants_chain.execute.return_value = MagicMock(data=[{"user_id": "p1"}])
-
-        events_chain = MagicMock()
-        events_chain.delete.return_value = events_chain
-        events_chain.eq.return_value = events_chain
-        events_chain.execute.return_value = MagicMock(data=[{"id": "e1"}])
-
-        _stub_tables(mock_sb, {"event_participants": participants_chain, "events": events_chain})
-
+    def test_delete_is_refused_without_notifications(self):
         from app.services.event_service import delete_event
-        delete_event("org1", "e1")
-
-        mock_get_username.assert_called_once_with("org1")
-        mock_create_notification.assert_called_once_with(
-            "p1", "e1", "event_deleted", "Event 'Tech Conference 2026' was deleted by john"
-        )
+        with pytest.raises(HTTPException) as exc:
+            delete_event("org1", "e1")
+        assert exc.value.status_code == 400
 
 
 # ──────────────────────────────────────────────
@@ -584,7 +618,13 @@ class TestCancelEventNotifications:
     @patch("app.services.event_service.supabase")
     @patch("app.services.event_service.get_event")
     def test_notifies_participants_on_cancel(self, mock_get_event, mock_sb, mock_create_notification, mock_get_username, mock_email):
-        mock_get_event.return_value = {"id": "e1", "title": "Tech Conference 2026", "created_by": "org1"}
+        mock_get_event.return_value = {
+            "id": "e1",
+            "title": "Tech Conference 2026",
+            "created_by": "org1",
+            "status": "active",
+            "start_datetime": "2999-01-01T10:00:00+00:00"
+        }
 
         events_chain = MagicMock()
         events_chain.update.return_value = events_chain
@@ -605,6 +645,7 @@ class TestCancelEventNotifications:
         mock_create_notification.assert_called_once_with(
             "p1", "e1", "event_cancelled", "Event 'Tech Conference 2026' was cancelled by john"
         )
+        participants_chain.delete.assert_not_called()
 
 # ──────────────────────────────────────────────
 # attach_organizers
@@ -941,3 +982,207 @@ class TestEventServiceUnchangedByOrganizers:
         assert result["data"] == rows
         assert all("organizer" not in item for item in result["data"])
         mock_get_summaries.assert_not_called()
+
+
+# ──────────────────────────────────────────────
+# get_profile_events
+# ──────────────────────────────────────────────
+
+class TestGetProfileEvents:
+    PAST = "2000-01-01T10:00:00+00:00"
+    FUTURE = "2999-01-01T10:00:00+00:00"
+
+    def _ev(self, id_, start, created_by="other", status="active"):
+        return {
+            "id": id_,
+            "title": f"t{id_}",
+            "status": status,
+            "start_datetime": start,
+            "created_by": created_by,
+        }
+
+    def _setup(self, mock_sb, organized, joined_rows):
+        events_chain = MagicMock()
+        events_chain.select.return_value = events_chain
+        events_chain.eq.return_value = events_chain
+        events_chain.execute.return_value = MagicMock(data=organized)
+
+        part_chain = MagicMock()
+        part_chain.select.return_value = part_chain
+        part_chain.eq.return_value = part_chain
+        part_chain.execute.return_value = MagicMock(data=joined_rows)
+
+        chains = {"events": events_chain, "event_participants": part_chain}
+        mock_sb.table.side_effect = lambda name: chains[name]
+        return events_chain, part_chain
+
+    @patch("app.services.event_service.supabase")
+    def test_queries_organized_and_joined(self, mock_sb):
+        events_chain, part_chain = self._setup(mock_sb, [], [])
+
+        from app.services.event_service import get_profile_events, PROFILE_EVENT_COLUMNS
+        get_profile_events("u1")
+
+        events_chain.select.assert_called_once_with(PROFILE_EVENT_COLUMNS)
+        events_chain.eq.assert_called_once_with("created_by", "u1")
+        part_chain.select.assert_called_once_with(f"event_id, events({PROFILE_EVENT_COLUMNS})")
+        assert part_chain.eq.call_args_list == [call("user_id", "u1"), call("status", "going")]
+
+    @patch("app.services.event_service.supabase")
+    def test_list_events_and_profile_events_share_columns_constant(self, mock_sb):
+        events_chain, _ = self._setup(mock_sb, [], [])
+        for name in ("gte", "order", "range"):
+            getattr(events_chain, name).return_value = events_chain
+
+        from app.services.event_service import (
+            get_profile_events, list_events, PROFILE_EVENT_COLUMNS,
+        )
+        get_profile_events("u1")
+        events_chain.select.assert_called_once_with(PROFILE_EVENT_COLUMNS)
+
+        events_chain.select.reset_mock()
+        list_events()
+        events_chain.select.assert_called_once_with(PROFILE_EVENT_COLUMNS)
+
+    @patch("app.services.event_service.supabase")
+    def test_result_has_exact_shape_when_empty(self, mock_sb):
+        self._setup(mock_sb, None, None)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert result == {
+            "organized": {"upcoming": [], "past": []},
+            "joined": {"upcoming": [], "past": []},
+        }
+
+    @patch("app.services.event_service.supabase")
+    def test_cancelled_events_dropped_from_both(self, mock_sb):
+        organized = [
+            self._ev(1, self.FUTURE, "u1"),
+            self._ev(2, self.FUTURE, "u1", status="cancelled"),
+        ]
+        joined = [
+            {"event_id": 3, "events": self._ev(3, self.FUTURE)},
+            {"event_id": 4, "events": self._ev(4, self.PAST, status="cancelled")},
+        ]
+        self._setup(mock_sb, organized, joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["organized"]["upcoming"]] == [1]
+        assert result["organized"]["past"] == []
+        assert [e["id"] for e in result["joined"]["upcoming"]] == [3]
+        assert result["joined"]["past"] == []
+
+    @patch("app.services.event_service.supabase")
+    def test_joined_drops_own_events_and_null_events(self, mock_sb):
+        joined = [
+            {"event_id": 1, "events": self._ev(1, self.FUTURE, "u1")},
+            {"event_id": 2, "events": None},
+            {"event_id": 3, "events": self._ev(3, self.FUTURE, "someone")},
+        ]
+        self._setup(mock_sb, [], joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["joined"]["upcoming"]] == [3]
+        assert result["joined"]["past"] == []
+
+    @patch("app.services.event_service.supabase")
+    def test_upcoming_ascending_and_past_descending(self, mock_sb):
+        organized = [
+            self._ev(1, "2999-03-01T10:00:00+00:00", "u1"),
+            self._ev(2, "2999-01-01T10:00:00+00:00", "u1"),
+            self._ev(3, "2999-02-01T10:00:00+00:00", "u1"),
+            self._ev(4, "2000-01-01T10:00:00+00:00", "u1"),
+            self._ev(5, "2000-03-01T10:00:00+00:00", "u1"),
+            self._ev(6, "2000-02-01T10:00:00+00:00", "u1"),
+        ]
+        self._setup(mock_sb, organized, [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["organized"]["upcoming"]] == [2, 3, 1]
+        assert [e["id"] for e in result["organized"]["past"]] == [5, 6, 4]
+
+    @patch("app.services.event_service.supabase")
+    def test_joined_split_and_sort(self, mock_sb):
+        joined = [
+            {"event_id": 1, "events": self._ev(1, "2999-02-01T10:00:00+00:00")},
+            {"event_id": 2, "events": self._ev(2, "2999-01-01T10:00:00+00:00")},
+            {"event_id": 3, "events": self._ev(3, "2000-01-01T10:00:00+00:00")},
+            {"event_id": 4, "events": self._ev(4, "2000-02-01T10:00:00+00:00")},
+        ]
+        self._setup(mock_sb, [], joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert [e["id"] for e in result["joined"]["upcoming"]] == [2, 1]
+        assert [e["id"] for e in result["joined"]["past"]] == [4, 3]
+
+    @patch("app.services.event_service.supabase")
+    def test_missing_start_goes_to_past_last(self, mock_sb):
+        organized = [
+            self._ev(1, None, "u1"),
+            self._ev(2, self.PAST, "u1"),
+            self._ev(3, "2000-06-01T10:00:00+00:00", "u1"),
+        ]
+        self._setup(mock_sb, organized, [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert result["organized"]["upcoming"] == []
+        assert [e["id"] for e in result["organized"]["past"]] == [3, 2, 1]
+
+    @patch("app.services.event_service.supabase")
+    def test_z_suffix_and_naive_timestamps_handled(self, mock_sb):
+        organized = [
+            self._ev(1, "2999-01-01T10:00:00Z", "u1"),
+            self._ev(2, "2000-01-01T10:00:00Z", "u1"),
+            self._ev(3, "2999-01-01T10:00:00", "u1"),
+            self._ev(4, "2000-01-01T10:00:00", "u1"),
+        ]
+        self._setup(mock_sb, organized, [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert {e["id"] for e in result["organized"]["upcoming"]} == {1, 3}
+        assert {e["id"] for e in result["organized"]["past"]} == {2, 4}
+
+    @patch("app.services.event_service.supabase")
+    def test_each_group_capped_at_50(self, mock_sb):
+        organized = [self._ev(i, f"2999-01-01T10:{i % 60:02d}:00+00:00", "u1") for i in range(60)]
+        organized += [self._ev(100 + i, f"2000-01-01T10:{i % 60:02d}:00+00:00", "u1") for i in range(60)]
+        joined = [
+            {"event_id": 200 + i, "events": self._ev(200 + i, self.FUTURE)} for i in range(55)
+        ]
+        joined += [
+            {"event_id": 300 + i, "events": self._ev(300 + i, self.PAST)} for i in range(55)
+        ]
+        self._setup(mock_sb, organized, joined)
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert len(result["organized"]["upcoming"]) == 50
+        assert len(result["organized"]["past"]) == 50
+        assert len(result["joined"]["upcoming"]) == 50
+        assert len(result["joined"]["past"]) == 50
+
+    @patch("app.services.event_service.supabase")
+    def test_result_keys_exact(self, mock_sb):
+        self._setup(mock_sb, [self._ev(1, self.FUTURE, "u1")], [])
+
+        from app.services.event_service import get_profile_events
+        result = get_profile_events("u1")
+
+        assert set(result.keys()) == {"organized", "joined"}
+        assert set(result["organized"].keys()) == {"upcoming", "past"}
+        assert set(result["joined"].keys()) == {"upcoming", "past"}
