@@ -405,15 +405,24 @@ def change_password(email: str, user_id: str, current_password: str, new_passwor
         raise HTTPException(status_code=400, detail="Password update failed. Please try again.")
 
 def get_user_factors(user_id: str) -> list:
-    """Retrieve all MFA factors for a user using the Supabase admin API."""
+    """Retrieve all MFA factors for a user using the Supabase admin REST API."""
+    import httpx
     try:
-        from supabase import create_client
-        admin_client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_SERVICE_KEY
-        )
-        res = admin_client.auth.admin.mfa.list_factors({"user_id": user_id})
-        return res.factors if hasattr(res, "factors") else []
+        url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}/factors"
+        headers = {
+            "apikey": settings.SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+        }
+        resp = httpx.get(url, headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "factors" in data:
+                return data["factors"]
+            return []
+        logger.error(f"Failed to list MFA factors for user {user_id}: {resp.status_code} {resp.text}")
+        return []
     except Exception as e:
         logger.error(f"Failed to list MFA factors for user {user_id}: {e}")
         return []
