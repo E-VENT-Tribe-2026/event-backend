@@ -8,6 +8,7 @@ from app.db.supabase_client import supabase
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -22,7 +23,16 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-
+    
+def get_optional_user(credentials: HTTPAuthorizationCredentials | None = Depends(optional_security)):
+    """For public endpoints: the signed-in user when a valid token is sent, otherwise None."""
+    if credentials is None:
+        return None
+    try:
+        result = supabase.auth.get_user(credentials.credentials)
+        return result.user
+    except Exception:
+        return None
 
 def get_current_onboarded_user(user=Depends(get_current_user)):
     """Extends get_current_user by requiring a completed profile (username + full_name)."""
