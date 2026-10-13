@@ -12,6 +12,7 @@ from app.api.v1 import (
     assistant_routes,
     friendship_routes,
     admin_routes,
+    invitation_routes,
 )
 
 api_router = APIRouter()
@@ -92,4 +93,10 @@ api_router.include_router(
     friendship_routes.router,
     prefix="/friends",
     tags=["Friends"]
+)
+
+api_router.include_router(
+    invitation_routes.router,
+    prefix="/invitations",
+    tags=["Invitations"]
 )
