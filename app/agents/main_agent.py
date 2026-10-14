@@ -12,7 +12,7 @@ MAIN_AGENT_PROMPT = (
     "1. Intent Classification & Guidance: Help users understand the platform, explore features, and answer product questions.\n"
     "2. Ambiguity & Clarification: If the user makes an ambiguous, incomplete, or underspecified request (e.g. asking to create an event with no details, or asking for event details without specifying which event), ask clear, polite clarifying questions.\n"
     "3. Entity Tracking & Tool Selection: When the user wants to perform an action, determine the appropriate tool and parameters:\n"
-    "   - search_events: To find, search, or list events (parameters: query, category, city, date, page, limit).\n"
+    "   - search_events: To find, search, or list events (parameters: query, category, city, date, upcoming: boolean [MUST be false if user asks for 'all events', searches by a specific event name or keyword, or asks for past events; set to true ONLY if user explicitly asks for 'upcoming' or 'future' events], page, limit).\n"
     "   - get_event_details: To retrieve details for a specific event (parameter: event_id in UUID format).\n"
     "   - draft_new_event: To draft/preview a new event (parameters: title, start_datetime, end_datetime, description, category, cost, max_capacity, location_name, latitude, longitude). Note: You only draft previews; events are never published autonomously.\n\n"
     "Response Format Guidelines:\n"
@@ -110,17 +110,17 @@ class MainAgent:
         tool_name = state.get("tool_name")
         output = state.get("tool_output", {})
 
-        # Populate rich metadata card
+        # Populate rich metadata card and default template
         if tool_name == "search_events":
             events = output.get("events", [])
             state["metadata"] = {"type": "event_search_results", "events": events}
             if not events:
                 state["reply"] = "I searched for events matching your criteria, but didn't find any active listings."
-            else:
-                lines = ["Here are the events I found for you:\n"]
-                for ev in events:
-                    lines.append(f"- **{ev.get('title')}** ({ev.get('category')}) at {ev.get('location_name', 'TBA')} — {ev.get('start_datetime')}")
-                state["reply"] = "\n".join(lines)
+                return state
+            lines = ["Here are the events I found for you:\n"]
+            for ev in events:
+                lines.append(f"- **{ev.get('title')}** ({ev.get('category')}) at {ev.get('location_name', 'TBA')} — {ev.get('start_datetime')}")
+            default_reply = "\n".join(lines)
 
         elif tool_name == "get_event_details":
             ev = output.get("event")
@@ -128,16 +128,16 @@ class MainAgent:
                 err = output.get("error", {}).get("message", "Event not found.")
                 state["reply"] = f"Could not retrieve event details: {err}"
                 state["metadata"] = None
-            else:
-                state["metadata"] = {"type": "event_details_card", "event": ev}
-                state["reply"] = (
-                    f"### {ev.get('title')}\n"
-                    f"- **Category:** {ev.get('category')}\n"
-                    f"- **Location:** {ev.get('location_name', 'TBA')}\n"
-                    f"- **Time:** {ev.get('start_datetime')} to {ev.get('end_datetime')}\n"
-                    f"- **Cost:** €{ev.get('cost', 0)}\n"
-                    f"- **Description:** {ev.get('description') or 'No description provided.'}"
-                )
+                return state
+            state["metadata"] = {"type": "event_details_card", "event": ev}
+            default_reply = (
+                f"### {ev.get('title')}\n"
+                f"- **Category:** {ev.get('category')}\n"
+                f"- **Location:** {ev.get('location_name', 'TBA')}\n"
+                f"- **Time:** {ev.get('start_datetime')} to {ev.get('end_datetime')}\n"
+                f"- **Cost:** €{ev.get('cost', 0)}\n"
+                f"- **Description:** {ev.get('description') or 'No description provided.'}"
+            )
 
         elif tool_name == "draft_new_event":
             success = output.get("success", False)
@@ -150,7 +150,7 @@ class MainAgent:
             }
 
             if success and draft:
-                state["reply"] = (
+                default_reply = (
                     f"### Draft Event Preview\n"
                     f"Here is your event draft:\n"
                     f"- **Title:** {draft.get('title')}\n"
@@ -162,9 +162,34 @@ class MainAgent:
                 )
             else:
                 issue_lines = [f"- {iss.get('field')}: {iss.get('message')}" for iss in issues]
-                state["reply"] = (
+                default_reply = (
                     f"I couldn't complete the draft preview because of the following validation issues:\n"
                     + "\n".join(issue_lines)
                 )
+        else:
+            default_reply = f"Tool '{tool_name}' executed."
 
+        # Synthesize tool results using the LLM in context of user query
+        try:
+            messages = state.get("messages", [])
+            prompt_messages = [
+                {"role": "system", "content": MAIN_AGENT_PROMPT},
+                *messages,
+                {
+                    "role": "system",
+                    "content": (
+                        f"The tool '{tool_name}' was executed with result:\n"
+                        f"{json.dumps(output, default=str)}\n\n"
+                        "Synthesize this result into an informative, direct response addressing the user's specific request."
+                    ),
+                },
+            ]
+            synthesized = llm_caller(prompt_messages)
+            if synthesized and synthesized.strip() and not synthesized.strip().startswith("```tool_call"):
+                state["reply"] = synthesized.strip()
+                return state
+        except Exception as exc:
+            logger.warning("LLM tool synthesis failed, falling back to template: %s", exc)
+
+        state["reply"] = default_reply
         return state
