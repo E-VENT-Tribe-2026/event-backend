@@ -49,8 +49,9 @@ class GuardianAgent:
 
         latest_user_message = ""
         for m in reversed(messages):
-            if m.get("role") == "user":
-                latest_user_message = m.get("content", "")
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            if role == "user":
+                latest_user_message = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
                 break
 
         lowered = latest_user_message.lower()
