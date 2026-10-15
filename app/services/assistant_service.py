@@ -32,12 +32,14 @@ def get_agent_graph():
 def call_llm(messages: list[dict[str, str]]) -> str:
     """Invoke the LLM provider via OpenAI compatibility layer."""
     if not settings.GEMINI_API_KEY:
+        print("❌ [call_llm] GEMINI_API_KEY is not set.")
         raise HTTPException(
             status_code=503,
             detail="AI assistant is not configured.",
         )
 
     try:
+        print(f"📡 [call_llm] Sending request to Gemini ({settings.GEMINI_MODEL})...")
         client = OpenAI(
             api_key=settings.GEMINI_API_KEY,
             base_url=GEMINI_OPENAI_BASE_URL,
@@ -51,13 +53,16 @@ def call_llm(messages: list[dict[str, str]]) -> str:
         reply = response.choices[0].message.content
         if not isinstance(reply, str) or not reply.strip():
             raise ValueError("Provider returned an empty response")
+        print("✅ [call_llm] Received response from Gemini.")
         return reply.strip()
 
     except Exception as exc:
+        status_code = getattr(exc, "status_code", None)
+        print(f"❌ [call_llm] Gemini request failed: {type(exc).__name__} (status={status_code})")
         logger.error(
             "Gemini request failed (type=%s, status=%s)",
             type(exc).__name__,
-            getattr(exc, "status_code", None),
+            status_code,
         )
         raise HTTPException(
             status_code=502,
@@ -65,11 +70,15 @@ def call_llm(messages: list[dict[str, str]]) -> str:
         ) from None
 
 
-def run_agent_workflow(messages: list[dict[str, str]], user_id: Optional[str] = None) -> AgentState:
+def run_agent_workflow(messages: list[Any], user_id: Optional[str] = None) -> AgentState:
     """Execute the multi-turn 2-agent LangGraph workflow."""
     graph = get_agent_graph()
+    raw_messages = [
+        m.model_dump() if hasattr(m, "model_dump") else (dict(m) if not isinstance(m, dict) else m)
+        for m in messages
+    ]
     initial_state: AgentState = {
-        "messages": messages,
+        "messages": raw_messages,
         "user_id": user_id,
         "entity_slots": {},
         "input_guard_passed": False,
