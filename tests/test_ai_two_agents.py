@@ -167,17 +167,19 @@ def test_main_agent_llm_dispatches_draft_tool():
 # ==========================================
 
 def test_tool_search_events():
-    res = tool_search_events({"category": "tech", "city": "Berlin"})
-    assert res["success"] is True
-    assert res["events"] == []
-    assert res["pagination"]["total"] == 0
+    with patch("app.services.event_search_service._fetch_events", return_value=([], 0)):
+        res = tool_search_events({"category": "tech", "city": "Berlin"})
+        assert res["success"] is True
+        assert res["events"] == []
+        assert res["pagination"]["total"] == 0
 
 
 def test_tool_get_event_details():
-    res = tool_get_event_details({"event_id": "11111111-1111-1111-1111-111111111111"})
-    assert "request_id" in res
-    assert res["success"] is False
-    assert res["error"]["code"] == "NOT_FOUND"
+    with patch("app.services.event_details_service._fetch_event", return_value=None):
+        res = tool_get_event_details({"event_id": "11111111-1111-1111-1111-111111111111"})
+        assert "request_id" in res
+        assert res["success"] is False
+        assert res["error"]["code"] == "NOT_FOUND"
 
 
 def test_tool_draft_new_event():
