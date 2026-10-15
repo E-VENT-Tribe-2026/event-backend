@@ -72,10 +72,12 @@ async def _fetch_jwks() -> dict:
 
 async def _get_signing_key(kid: str) -> dict:
     now = time.monotonic()
-    age = now - _jwks_cache["fetched_at"]
-    keys = _jwks_cache["keys"]
+    fetched_at = _jwks_cache.get("fetched_at", 0.0)
+    keys = _jwks_cache.get("keys", {})
+    never_fetched = (fetched_at == 0.0) or not keys
+    age = now - fetched_at
 
-    if age > JWKS_TTL_SECONDS or (kid not in keys and age > JWKS_MIN_REFETCH_SECONDS):
+    if never_fetched or age > JWKS_TTL_SECONDS or (kid not in keys and age > JWKS_MIN_REFETCH_SECONDS):
         try:
             keys = await _fetch_jwks()
             _jwks_cache.update(keys=keys, fetched_at=now)
