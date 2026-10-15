@@ -371,3 +371,156 @@ class TestAdminPanel:
             assert "already an administrator" in res.json()["detail"].lower()
         finally:
             app.dependency_overrides.pop(require_admin, None)
+
+    # 8. Ticket #194: Event Details Returns Chat for upcoming, past, and cancelled events
+    @pytest.mark.parametrize("event_status,start_dt", [
+        ("upcoming", (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()),
+        ("past", (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()),
+        ("cancelled", (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()),
+    ])
+    @patch("app.services.admin_service.supabase")
+    def test_get_admin_event_details_includes_chat_messages(self, mock_sb, event_status, start_dt):
+        app.dependency_overrides[require_admin] = lambda: MockAdminUser()
+        try:
+            is_cancelled = (event_status == "cancelled")
+            ev_chain = MagicMock()
+            ev_chain.select.return_value = ev_chain
+            ev_chain.eq.return_value = ev_chain
+            ev_chain.single.return_value = ev_chain
+            ev_chain.execute.return_value = MagicMock(data={
+                "id": f"event-{event_status}",
+                "title": f"Event {event_status.capitalize()}",
+                "description": "Event Description",
+                "category": "Tech",
+                "start_datetime": start_dt,
+                "end_datetime": start_dt,
+                "location_name": "Auditorium",
+                "latitude": 12.34,
+                "longitude": 56.78,
+                "cost": 10.0,
+                "max_capacity": 100,
+                "status": "cancelled" if is_cancelled else "active",
+                "created_by": "org-id-1",
+            })
+
+            org_chain = MagicMock()
+            org_chain.select.return_value = org_chain
+            org_chain.eq.return_value = org_chain
+            org_chain.single.return_value = org_chain
+            org_chain.execute.return_value = MagicMock(data={
+                "id": "org-id-1",
+                "username": "organizer_user",
+                "full_name": "Organizer One",
+                "avatar_url": "https://img.com/org.png",
+                "avatar_kind": "photo",
+                "icon_id": None,
+            })
+
+            part_chain = MagicMock()
+            part_chain.select.return_value = part_chain
+            part_chain.eq.return_value = part_chain
+            part_chain.order.return_value = part_chain
+            part_chain.execute.return_value = MagicMock(data=[
+                {"id": 1, "user_id": "user-chat-1", "status": "registered", "created_at": "2026-10-01T00:00:00Z"}
+            ])
+
+            chat_chain = MagicMock()
+            chat_chain.select.return_value = chat_chain
+            chat_chain.eq.return_value = chat_chain
+            chat_chain.order.return_value = chat_chain
+            chat_chain.execute.return_value = MagicMock(data=[
+                {
+                    "id": 101,
+                    "event_id": f"event-{event_status}",
+                    "sender_id": "user-chat-1",
+                    "content": "Hello everyone!",
+                    "type": "chat",
+                    "created_at": "2026-10-01T12:00:00Z",
+                },
+                {
+                    "id": 102,
+                    "event_id": f"event-{event_status}",
+                    "sender_id": None,
+                    "content": "Welcome to the event chat!",
+                    "type": "notification",
+                    "created_at": "2026-10-01T11:00:00Z",
+                },
+            ])
+
+            prof_chain = MagicMock()
+            prof_chain.select.return_value = prof_chain
+            prof_chain.in_.return_value = prof_chain
+            prof_chain.execute.return_value = MagicMock(data=[
+                {
+                    "id": "user-chat-1",
+                    "username": "chatty_user",
+                    "full_name": "Chatty Person",
+                    "avatar_url": "https://img.com/avatar1.png",
+                    "avatar_kind": "photo",
+                    "icon_id": None,
+                }
+            ])
+
+            def table_router(table_name):
+                if table_name == "events":
+                    return ev_chain
+                if table_name == "event_participants":
+                    return part_chain
+                if table_name == "event_chats":
+                    return chat_chain
+                if table_name == "profiles":
+                    return org_chain if org_chain.execute.call_count == 0 else prof_chain
+                return MagicMock()
+
+            mock_sb.table.side_effect = table_router
+
+            res = client.get(f"/api/admin/events/event-{event_status}")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["id"] == f"event-{event_status}"
+            assert data["is_cancelled"] == is_cancelled
+
+            # Verify chat messages are included
+            assert "chats" in data
+            assert "chat" in data
+            assert len(data["chats"]) == 2
+
+            # Check regular user message
+            user_msg = next(m for m in data["chats"] if m["id"] == 101)
+            assert user_msg["sender_id"] == "user-chat-1"
+            assert user_msg["username"] == "chatty_user"
+            assert user_msg["full_name"] == "Chatty Person"
+            assert user_msg["avatar_url"] == "https://img.com/avatar1.png"
+            assert user_msg["text"] == "Hello everyone!"
+            assert user_msg["time"] == "2026-10-01T12:00:00Z"
+            assert user_msg["is_system_message"] is False
+
+            # Check system message
+            sys_msg = next(m for m in data["chats"] if m["id"] == 102)
+            assert sys_msg["sender_id"] is None
+            assert sys_msg["text"] == "Welcome to the event chat!"
+            assert sys_msg["time"] == "2026-10-01T11:00:00Z"
+            assert sys_msg["is_system_message"] is True
+        finally:
+            app.dependency_overrides.pop(require_admin, None)
+
+    # 9. Ticket #194: Refuse user account requesting event details through admin panel
+    @patch("app.core.dependencies.supabase")
+    def test_admin_event_details_refuses_regular_user_account(self, mock_sb):
+        valid_user = MagicMock()
+        valid_user.id = "regular-user-id"
+        mock_sb.auth.get_user.return_value = MagicMock(user=valid_user)
+
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data={"role": "user"})
+        mock_sb.table.return_value = profile_chain
+
+        aal2_token = _create_jwt({"sub": "regular-user-id", "aal": "aal2"})
+        headers = {"Authorization": f"Bearer {aal2_token}"}
+
+        res = client.get("/api/admin/events/any-event-id", headers=headers)
+        assert res.status_code == 403
+        assert "Forbidden" in res.json()["detail"]

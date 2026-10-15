@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.utils.query_safety import like_contains
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,9 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
         count="exact"
     )
 
-    if search and search.strip():
-        term = search.strip()
-        query = query.ilike("username", f"%{term}%")
+    pattern = like_contains(search) if search else None
+    if pattern:
+        query = query.ilike("username", pattern)
 
     res = (
         query
@@ -171,8 +172,9 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
         query = query.neq("status", "cancelled").lt("start_datetime", now_iso)
     # "all" does not filter by status or date
 
-    if search and search.strip():
-        query = query.ilike("title", f"%{search.strip()}%")
+    pattern = like_contains(search) if search else None
+    if pattern:
+        query = query.ilike("title", pattern)
 
     if filter_norm == "upcoming":
         query = query.order("start_datetime", desc=False)
@@ -410,6 +412,65 @@ def get_admin_event_details(event_id: str) -> dict:
             "registered_at": p.get("created_at"),
         })
 
+    # 4. Fetch chat messages
+    chat_res = (
+        supabase.table("event_chats")
+        .select("id, sender_id, content, type, created_at")
+        .eq("event_id", event_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    raw_chats = chat_res.data or []
+    chat_sender_ids = list(dict.fromkeys(c["sender_id"] for c in raw_chats if c.get("sender_id")))
+
+    missing_chat_senders = [sid for sid in chat_sender_ids if sid not in profile_map]
+    if missing_chat_senders:
+        try:
+            cprof_res = (
+                supabase.table("profiles")
+                .select("id, username, full_name, avatar_url, avatar_kind, icon_id")
+                .in_("id", missing_chat_senders)
+                .execute()
+            )
+            for p in (cprof_res.data or []):
+                profile_map[p["id"]] = _build_user_summary(p)
+        except Exception as e:
+            logger.error(f"Failed to fetch chat sender profiles for event {event_id}: {e}")
+
+    chats = []
+    for c in raw_chats:
+        sender_id = c.get("sender_id")
+        msg_type = str(c.get("type") or "chat").lower()
+        is_system = (not sender_id) or (msg_type in ("system", "notification"))
+
+        sender_info = None
+        if not is_system and sender_id:
+            sender_info = profile_map.get(sender_id) or _build_user_summary(None, sender_id)
+
+        username = sender_info.get("username") if sender_info else ("system" if is_system else None)
+        full_name = sender_info.get("full_name") if sender_info else ("System" if is_system else None)
+        avatar_url = sender_info.get("avatar_url") if sender_info else None
+        avatar_kind = sender_info.get("avatar_kind") if sender_info else "icon"
+        icon_id = sender_info.get("icon_id") if sender_info else None
+
+        item = {
+            "id": c.get("id"),
+            "sender_id": sender_id,
+            "sender": sender_info,
+            "username": username,
+            "full_name": full_name,
+            "avatar_url": avatar_url,
+            "avatar_kind": avatar_kind,
+            "icon_id": icon_id,
+            "text": c.get("content") or "",
+            "content": c.get("content") or "",
+            "time": c.get("created_at"),
+            "created_at": c.get("created_at"),
+            "is_system_message": is_system,
+            "type": "system" if is_system else msg_type,
+        }
+        chats.append(item)
+
     return {
         "id": event.get("id"),
         "title": event.get("title"),
@@ -428,6 +489,8 @@ def get_admin_event_details(event_id: str) -> dict:
         "organizer": organizer,
         "participant_count": len(participants),
         "participants": participants,
+        "chats": chats,
+        "chat": chats,
     }
 
 
@@ -437,29 +500,57 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     Refuses if the account already is an administrator.
     Offers no way to remove the administrator role.
     """
-    # 1. Fetch target user
-    prof_res = (
-        supabase.table("profiles")
-        .select("id, role")
-        .eq("id", target_user_id)
-        .single()
-        .execute()
-    )
-    if not prof_res.data:
+    cleaned_user_id = str(target_user_id or "").strip().strip("{}")
+    if not cleaned_user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    # 1. Fetch target user
+    prof_res = None
+    try:
+        prof_res = (
+            supabase.table("profiles")
+            .select("id, role")
+            .eq("id", cleaned_user_id)
+            .single()
+            .execute()
+        )
+    except Exception as e:
+        logger.debug(f"Target lookup by id failed for {cleaned_user_id}: {e}")
+        try:
+            prof_res = (
+                supabase.table("profiles")
+                .select("id, role")
+                .eq("username", cleaned_user_id)
+                .single()
+                .execute()
+            )
+        except Exception as e2:
+            logger.debug(f"Target lookup by username failed for {cleaned_user_id}: {e2}")
+
+    if not prof_res or not prof_res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    actual_target_id = prof_res.data.get("id")
     current_role = prof_res.data.get("role")
-    if current_role == "administrator":
+    if current_role in ("administrator", "admin"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Account is already an administrator."
         )
 
+    # Re-assert service role header on postgrest client
+    try:
+        from app.core.config import settings
+        if settings.SUPABASE_SERVICE_KEY and hasattr(supabase, "postgrest"):
+            supabase.postgrest.auth(settings.SUPABASE_SERVICE_KEY)
+    except Exception as e:
+        logger.warning(f"Could not re-assert service key on postgrest client: {e}")
+
     # 2. Update role to administrator
     upd_res = (
         supabase.table("profiles")
         .update({"role": "administrator"})
-        .eq("id", target_user_id)
+        .eq("id", actual_target_id)
         .execute()
     )
     if not upd_res.data:
@@ -467,6 +558,6 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
 
     return {
         "message": "Administrator role granted successfully.",
-        "user_id": target_user_id,
+        "user_id": actual_target_id,
         "role": "administrator",
     }

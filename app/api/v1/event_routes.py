@@ -1,7 +1,8 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
-from app.core.dependencies import get_current_user, get_current_onboarded_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user, get_optional_user
+from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
 from fastapi import HTTPException
 from app.services import event_service
@@ -16,6 +17,8 @@ from app.services.event_service import (
     _update_event_side_effects,
     attach_organizers,
 )
+from app.services.invitation_service import get_invitation_summary
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -65,11 +68,11 @@ def get_all_my_events(user=Depends(get_current_onboarded_user)):
 def get_events(
     page: int = Query(1),
     limit: int = Query(10),
-    category: str | None = None,
+    category: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     upcoming: bool = False,
-    search: str | None = None,
+    search: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     date: str | None = None,
-    city: str | None = None,
+    city: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
 ):
     result = list_events(page, limit, category, upcoming, search, date, city)
     attach_organizers(result.get("data") or [])
@@ -102,10 +105,19 @@ def update_existing_event(
 
 
 @router.get("/{event_id}")
-def read_event(event_id: str):
-    """Get a single event by ID. Public endpoint."""
+def read_event(event_id: str, user=Depends(get_optional_user)):
+    """Get a single event by ID. Public endpoint.
+
+    For a signed-in user, invitation says whether they were invited to the event (#186).
+    """
     event = get_event(event_id)
     attach_organizers([event])
+    if user is not None:
+        try:
+            event["invitation"] = get_invitation_summary(user.id, event)
+        except Exception:
+            logger.error(f"Invitation lookup failed for event {event_id}", exc_info=True)
+            event["invitation"] = None
     return event
 
 

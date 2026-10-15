@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, Path
 from app.core.dependencies import require_admin
+from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.admin_schema import (
     AdminCountsResponse,
     AdminUserListResponse,
@@ -49,7 +50,7 @@ def get_counts(admin=Depends(require_admin)):
 
 @router.get("/users", response_model=AdminUserListResponse)
 def get_users(
-    search: Optional[str] = Query(None, description="Case-insensitive substring search by username"),
+    search: Optional[str] = Query(None,max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by username"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     admin=Depends(require_admin),
@@ -91,7 +92,7 @@ def grant_admin(
 @router.get("/events", response_model=AdminEventListResponse)
 def get_events(
     status_filter: str = Query("all", description="Filter list: all, past, upcoming, cancelled"),
-    search: Optional[str] = Query(None, description="Case-insensitive substring search by event title"),
+    search: Optional[str] = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by event title"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     admin=Depends(require_admin),

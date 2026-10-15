@@ -120,6 +120,37 @@ class AdminParticipantItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class AdminChatMessageSender(BaseModel):
+    id: Optional[str] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatar_kind: Optional[str] = "icon"
+    icon_id: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class AdminChatMessageItem(BaseModel):
+    id: int
+    sender_id: Optional[str] = None
+    sender: Optional[AdminChatMessageSender] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatar_kind: Optional[str] = "icon"
+    icon_id: Optional[str] = None
+    text: str
+    content: str
+    time: Optional[str] = None
+    created_at: Optional[str] = None
+    is_system_message: bool = False
+    type: Optional[str] = "chat"
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class AdminEventDetailResponse(BaseModel):
     id: str
     title: str
@@ -138,6 +169,8 @@ class AdminEventDetailResponse(BaseModel):
     organizer: Optional[AdminEventOrganizerSummary] = None
     participant_count: int = 0
     participants: List[AdminParticipantItem] = []
+    chats: List[AdminChatMessageItem] = []
+    chat: List[AdminChatMessageItem] = []
 
     model_config = ConfigDict(extra="ignore")
 

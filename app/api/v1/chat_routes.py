@@ -23,11 +23,11 @@ router = APIRouter()
         "- You must be a participant of the event.\n\n"
         "**Errors:**\n"
         "- `403` — not a participant of the event.\n"
-        "- `400` — empty message content."
+        "- `422` — message is empty, longer than 2000 characters, or contains control characters."
     ),
     responses={
         201: {"description": "Message sent successfully."},
-        400: {"description": "Empty message content."},
+        422: {"description": "Message is empty, too long, or contains control characters."},
         403: {"description": "Not a participant of this event."},
         401: {"description": "Missing or invalid JWT token."},
     },
@@ -79,11 +79,11 @@ def list_messages(
         "**Errors:**\n"
         "- `403` — you are not the sender.\n"
         "- `404` — message not found.\n"
-        "- `400` — empty updated content."
+        "- `422` — message is empty, longer than 2000 characters, or contains control characters."
     ),
     responses={
         200: {"description": "Message updated successfully."},
-        400: {"description": "Empty updated content."},
+        422: {"description": "Message is empty, too long, or contains control characters."},
         403: {"description": "You can only edit your own messages."},
         404: {"description": "Message not found."},
         401: {"description": "Missing or invalid JWT token."},

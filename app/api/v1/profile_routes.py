@@ -3,6 +3,7 @@ import mimetypes
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from app.core.dependencies import get_current_user, get_current_onboarded_user
+from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
@@ -126,7 +127,7 @@ async def upload_profile_photo(
 
 @router.get("/search")
 def search_public_profiles(
-    q: str = Query(..., min_length=1, description="Search query for username"),
+    q: str = Query(..., min_length=1, max_length=SEARCH_TEXT_MAX_LENGTH, description="Search query for username"),
     page: int = Query(1, ge=1, le=10000),
     limit: int = Query(10, ge=1, le=50),
     user=Depends(get_current_user),
