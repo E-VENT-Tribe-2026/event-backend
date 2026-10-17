@@ -12,34 +12,50 @@ logger = logging.getLogger(__name__)
 
 def guardian_input_node(state: AgentState) -> AgentState:
     """Evaluate incoming user prompt through the input gate."""
-    return GuardianAgent.evaluate_input(state)
+    print("\n🛡️  [GuardianAgent: Input Gate] Evaluating incoming message...")
+    res = GuardianAgent.evaluate_input(state)
+    if res.get("input_guard_passed"):
+        print("✅ [GuardianAgent: Input Gate] PASSED - Proceeding to MainAgent.")
+    else:
+        print(f"❌ [GuardianAgent: Input Gate] BLOCKED - {res.get('guard_block_reason')}")
+    return res
 
 
 def main_agent_node(state: AgentState) -> AgentState:
     """Execute main conversational reasoning, intent identification, and response formatting."""
-    return MainAgent.execute(state)
+    print("🤖 [MainAgent] Starting reasoning turn via LLM...")
+    res = MainAgent.execute(state)
+    if res.get("tool_name"):
+        print(f"🔧 [MainAgent] Tool dispatch requested: '{res.get('tool_name')}' with input: {res.get('tool_input')}")
+    else:
+        print("💬 [MainAgent] Reply generated.")
+    return res
 
 
 def tools_node(state: AgentState) -> AgentState:
     """Execute deterministic backend tools per specification."""
     tool_name = state.get("tool_name")
     tool_input = state.get("tool_input") or {}
+    print(f"⚙️  [ToolsNode] Executing tool: '{tool_name}'...")
 
     tool_fn = TOOL_REGISTRY.get(tool_name)
     if tool_fn:
         try:
             output = tool_fn(tool_input)
+            print(f"⚙️  [ToolsNode] Execution completed successfully: {output}")
         except Exception as exc:
             logger.error("Error executing tool %s: %s", tool_name, exc, exc_info=True)
             output = {
                 "success": False,
                 "error": {"code": "INTERNAL_ERROR", "message": f"Failed executing {tool_name}."}
             }
+            print(f"❌ [ToolsNode] Tool failed: {exc}")
     else:
         output = {
             "success": False,
             "error": {"code": "TOOL_NOT_FOUND", "message": f"Tool {tool_name} is not registered."}
         }
+        print(f"❌ [ToolsNode] Tool '{tool_name}' not found.")
 
     state["tool_output"] = output
     state["tool_executed"] = True
@@ -48,7 +64,10 @@ def tools_node(state: AgentState) -> AgentState:
 
 def guardian_output_node(state: AgentState) -> AgentState:
     """Sanitize the generated response through the output gate."""
-    return GuardianAgent.sanitize_output(state)
+    print("🛡️  [GuardianAgent: Output Gate] Sanitizing response for leaks...")
+    res = GuardianAgent.sanitize_output(state)
+    print("✅ [GuardianAgent: Output Gate] Sanitization complete. Ready to respond.\n")
+    return res
 
 
 def route_after_input_guard(state: AgentState) -> str:

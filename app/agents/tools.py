@@ -7,8 +7,8 @@ from typing import Any
 
 def tool_search_events(tool_input: dict[str, Any]) -> dict[str, Any]:
     """Execute search_events tool; will be replaced by `from app.services.event_search_service import search_events; return search_events(tool_input)` once merged."""
-    # from app.services.event_search_service import search_events
-    # return search_events(tool_input)
+    from app.services.event_search_service import search_events
+    return search_events(tool_input)
 
     return {
         "request_id": str(uuid.uuid4()),
@@ -21,8 +21,9 @@ def tool_search_events(tool_input: dict[str, Any]) -> dict[str, Any]:
 
 def tool_get_event_details(tool_input: dict[str, Any]) -> dict[str, Any]:
     """Execute get_event_details tool; will be replaced by `from app.services.event_details_service import get_event_details; return get_event_details(tool_input)` once merged."""
-    # from app.services.event_details_service import get_event_details
-    # return get_event_details(tool_input)
+    from app.services.event_details_service import get_event_details
+    user_id = tool_input.get("user_id") or "system"
+    return get_event_details(tool_input, user_id)
 
     return {
         "request_id": str(uuid.uuid4()),
@@ -34,8 +35,8 @@ def tool_get_event_details(tool_input: dict[str, Any]) -> dict[str, Any]:
 
 def tool_draft_new_event(tool_input: dict[str, Any]) -> dict[str, Any]:
     """Execute draft_new_event tool; will be replaced by `from app.services.event_draft_service import draft_new_event; return draft_new_event(tool_input)` once merged."""
-    # from app.services.event_draft_service import draft_new_event
-    # return draft_new_event(tool_input)
+    from app.services.event_draft_service import draft_new_event
+    return draft_new_event(tool_input)
 
     return {
         "request_id": str(uuid.uuid4()),

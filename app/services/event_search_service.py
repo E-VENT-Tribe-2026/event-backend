@@ -34,10 +34,13 @@ class SearchInputError(Exception):
 
 
 def search_events(payload: Any) -> dict:
+    print(f"🔍 [search_events] Received payload: {payload}")
     request_id = str(uuid.uuid4())
     try:
         criteria = _parse_input(payload)
+        print(f"✅ [search_events] Parsed input successfully: {criteria}")
     except SearchInputError as exc:
+        print(f"❌ [search_events] Invalid input: {exc}")
         return _failure(request_id, "INVALID_INPUT", exc.message, exc.field)
 
     try:

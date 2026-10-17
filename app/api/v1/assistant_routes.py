@@ -33,4 +33,4 @@ def event_details_tool(body: Any = Body(...), user=Depends(get_current_user)):
 
 @router.post("/tools/draft-event", response_model=DraftNewEventResponse)
 def draft_event_tool(body: Any = Body(...), user=Depends(get_current_user)):
-    return draft_new_event(body, getattr(user, "id", None))
+    return draft_new_event(body, getattr(user, "id", None))
