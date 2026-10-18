@@ -165,6 +165,19 @@ def update_profile(user_id: str, update_data: dict):
                 )
             update_data["avatar_kind"] = kind_str
 
+    # Accept visibility: only public or friends_only (or 'friends only' normalized)
+    if "visibility" in update_data:
+        vis = update_data["visibility"]
+        if vis is not None:
+            vis_str = str(vis).strip().lower()
+            if vis_str in ("public", "friends_only", "friends only"):
+                update_data["visibility"] = "friends_only" if vis_str in ("friends_only", "friends only") else "public"
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Visibility must be either 'public' or 'friends only'."
+                )
+
     # If the user updates interests and/or bio, regenerate the interest embedding.
     # We fetch the existing profile so partial updates still produce a correct embedding.
     if "interests" in update_data or "bio" in update_data:
@@ -327,6 +340,11 @@ def get_public_profile(user_id: str):
     if not profile.get("avatar_kind"):
         profile["avatar_kind"] = "icon"
 
+    if "banner_url" in profile and "banner" not in profile:
+        profile["banner"] = profile.get("banner_url")
+    elif "banner" in profile and "banner_url" not in profile:
+        profile["banner_url"] = profile.get("banner")
+
     return profile
 
 
@@ -346,7 +364,7 @@ def search_profiles(query: str, page: int, limit: int, viewer_id: str):
     q = (
         supabase.table("profiles")
         .select(SEARCH_COLUMNS)
-        .eq("visibility", "public")
+        .in_("visibility", ["public", "friends_only", "friends only"])
         .ilike("username", f"%{escape_like(query)}%")
         .neq("id", viewer_id)
     )

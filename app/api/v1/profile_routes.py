@@ -8,9 +8,11 @@ from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
     LocationUpdateRequest,
+    OtherUserFriendsPage,
 )
 from app.schemas.auth_schema import ChooseUsernameRequest
 from app.services.public_profile_service import build_public_profile
+from app.services.friendship_service import get_user_friends
 from app.services.profile_service import (
     get_profile,
     update_profile,
@@ -136,7 +138,21 @@ def search_public_profiles(
     return search_profiles(q, page, limit, user.id)
 
 
+@router.get("/{user_id}/friends", response_model=OtherUserFriendsPage)
+def read_user_friends(
+    user_id: UUID,
+    page: int = Query(1, ge=1, le=10000),
+    limit: int = Query(20, ge=1, le=50),
+    user=Depends(get_current_user),
+):
+    """Return another user's friends list in pages.
+    Accessible to everyone for public profiles, and to friends only for friends-only profiles.
+    """
+    return get_user_friends(str(user_id), user.id, page, limit)
+
+
 @router.get("/{user_id}")
 def read_public_profile(user_id: UUID, user=Depends(get_current_user)):
     """Get a profile by user ID, including events and friendship state."""
     return build_public_profile(str(user_id), user.id)
+

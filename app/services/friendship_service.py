@@ -1,6 +1,6 @@
 import logging
 import uuid
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.services.profile_service import get_user_summaries, get_username
 from app.services.notification_service import create_notification, delete_notifications_for
@@ -438,3 +438,87 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
     from app.services.profile_service import build_user_summary
     data = [{"user": build_user_summary(row)} for row in rows]
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}
+
+
+def get_user_friends(
+    target_user_id: str,
+    viewer_id: str,
+    page: int = 1,
+    limit: int = DEFAULT_PAGE_LIMIT,
+) -> dict:
+    """Return paginated friends for another user.
+    Accessible to everyone for public profiles, and to friends only for friends-only profiles.
+    Each friend is returned with profile picture, full name and username (UserSummary).
+    """
+    try:
+        t_uid = _uuid(target_user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profile not found",
+        )
+
+    profile_resp = (
+        supabase.table("profiles")
+        .select("id, visibility")
+        .eq("id", t_uid)
+        .limit(1)
+        .execute()
+    )
+    if not profile_resp.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profile not found",
+        )
+
+    target_profile = profile_resp.data[0]
+    visibility = str(target_profile.get("visibility") or "public").strip().lower()
+
+    friendship = get_friendship_state(viewer_id, target_user_id)
+    is_friend = friendship.get("status") in ("self", "friends")
+
+    if visibility != "public" and not is_friend:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This user's friends list is visible only to friends.",
+        )
+
+    start = (page - 1) * limit
+    resp = (
+        supabase.table("friendships")
+        .select(FRIENDSHIP_COLUMNS)
+        .or_(f"user_id.eq.{t_uid},friend_id.eq.{t_uid}")
+        .order("created_at", desc=True)
+        .order("id", desc=True)
+        .range(start, start + limit)
+        .execute()
+    )
+    rows, has_more = _page(resp.data or [], limit)
+
+    others = [r["friend_id"] if _norm(r["user_id"]) == _norm(target_user_id) else r["user_id"] for r in rows]
+    summaries = get_user_summaries(others) if others else {}
+    data = [summaries[other] for other in others if other in summaries]
+    return {"page": page, "limit": limit, "has_more": has_more, "data": data}
+
+
+def get_profile_friends(user_id: str, limit: int = 20) -> list:
+    """Return a list of friend UserSummary objects for user_id (first page)."""
+    try:
+        uid = _uuid(user_id)
+        resp = (
+            supabase.table("friendships")
+            .select(FRIENDSHIP_COLUMNS)
+            .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
+            .order("created_at", desc=True)
+            .order("id", desc=True)
+            .range(0, limit - 1)
+            .execute()
+        )
+        rows = resp.data or []
+        others = [r["friend_id"] if _norm(r["user_id"]) == _norm(user_id) else r["user_id"] for r in rows]
+        summaries = get_user_summaries(others) if others else {}
+        return [summaries[other] for other in others if other in summaries]
+    except Exception as e:
+        logger.warning(f"Failed to fetch profile friends for {user_id}: {e}")
+        return []
+

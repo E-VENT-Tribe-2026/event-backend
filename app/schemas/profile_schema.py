@@ -69,6 +69,16 @@ class ProfileUpdateRequest(BaseModel):
             v, field_label="Biography", min_length=0, max_length=BIO_MAX_LENGTH
         )
 
+    @field_validator("visibility", mode="before")
+    @classmethod
+    def validate_visibility(cls, v):
+        if v is None:
+            return None
+        v_str = str(v).strip().lower()
+        if v_str in ("public", "friends_only", "friends only"):
+            return "friends_only" if v_str in ("friends_only", "friends only") else "public"
+        raise ValueError("Visibility must be either 'public' or 'friends only'.")
+
 
 class LocationUpdateRequest(BaseModel):
     latitude: float
@@ -88,3 +98,10 @@ class UserSummary(BaseModel):
     avatar_kind: str = "icon"
     icon_id: Optional[str] = None
     avatar_url: Optional[str] = None
+
+
+class OtherUserFriendsPage(BaseModel):
+    page: int
+    limit: int
+    has_more: bool
+    data: List[UserSummary]
