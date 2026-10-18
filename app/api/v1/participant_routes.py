@@ -7,6 +7,8 @@ from app.services.participant_service import (
     leave_event,
     _leave_side_effects,
     get_event_participants,
+    get_participants_for_viewer,
+    get_friends_attending,
     get_my_events,
     remove_participant,
     _remove_side_effects,
@@ -41,7 +43,14 @@ def leave_event_api(
 
 @router.get("/{event_id}/participants")
 def participants_api(event_id: str, user=Depends(get_current_user)):
-    return get_event_participants(event_id)
+    """Full participant list: organizer, participants and administrators only; each row has is_friend."""
+    return get_participants_for_viewer(event_id, user.id)
+
+
+@router.get("/{event_id}/participants/friends")
+def participants_friends_api(event_id: str, user=Depends(get_current_user)):
+    """The participants of the event who are friends of the signed-in user (open to any signed-in user)."""
+    return get_friends_attending(event_id, user.id)
 
 
 @router.get("/{event_id}/participants/count")

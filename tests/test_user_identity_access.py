@@ -83,11 +83,13 @@ class TestParticipantRoutesRequireVerifiedAuth:
         assert res.status_code in (401, 403)
         mock_get_participants.assert_not_called()
 
+    @patch("app.api.v1.participant_routes.get_participants_for_viewer")
     @patch("app.api.v1.participant_routes.get_event_participants")
     @patch("app.core.dependencies.supabase")
-    def test_verified_token_returns_participants(self, mock_sb, mock_get_participants):
+    def test_verified_token_returns_participants(self, mock_sb, mock_get_participants, mock_for_viewer):
         mock_sb.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="u1"))
         mock_get_participants.return_value = [{"user_id": "u2"}, {"user_id": "u3"}]
+        mock_for_viewer.return_value = [{"user_id": "u2"}, {"user_id": "u3"}]
         headers = {"Authorization": "Bearer valid-token"}
         c = TestClient(app)
 
@@ -252,7 +254,9 @@ class TestParticipantsRouteRealPath:
         mock_sb = MagicMock()
         mock_sb.table.return_value = chain
 
-        with patch("app.services.participant_service.supabase", mock_sb):
+        with patch("app.services.participant_service.supabase", mock_sb), \
+             patch("app.services.participant_service.get_event", return_value={"id": "e1", "created_by": "viewer"}), \
+             patch("app.services.participant_service.get_friend_ids", return_value=[]):
             response = client.get("/api/participants/e1/participants")
 
         assert response.status_code == 200
@@ -284,7 +288,9 @@ class TestParticipantsRouteRealPath:
         mock_sb = MagicMock()
         mock_sb.table.return_value = chain
 
-        with patch("app.services.participant_service.supabase", mock_sb):
+        with patch("app.services.participant_service.supabase", mock_sb), \
+             patch("app.services.participant_service.get_event", return_value={"id": "e1", "created_by": "viewer"}), \
+             patch("app.services.participant_service.get_friend_ids", return_value=[]):
             response = client.get("/api/participants/e1/participants")
 
         assert response.status_code == 200

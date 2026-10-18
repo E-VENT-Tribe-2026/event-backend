@@ -5,6 +5,7 @@ from app.services.notification_service import create_notification
 from app.services.event_service import get_event
 from app.services.chat_service import post_system_notification
 from app.services.profile_service import get_username, build_user_summary
+from app.services.friendship_service import get_friend_ids
 
 logger = logging.getLogger(__name__)
 
@@ -182,21 +183,145 @@ def _single_profile(embed):
     return embed if isinstance(embed, dict) else None
 
 
-def get_event_participants(event_id: str):
-    """Return an event's participants, each with a user summary; profiles keeps its existing {full_name, avatar_url} shape."""
+def _norm(value) -> str:
+    return str(value).strip().lower()
+
+
+_PARTICIPANT_SELECT = "user_id, status, profiles(username, full_name, avatar_url, avatar_kind, icon_id)"
+
+
+def _participant_row(row: dict) -> dict:
+    """Shape one event_participants row; profiles keeps its existing {full_name, avatar_url} shape."""
+    profile = _single_profile(row.get("profiles"))
+    row["user"] = build_user_summary(profile, row.get("user_id"))
+    row["profiles"] = _trim_profile(profile) if profile is not None else None
+    return row
+
+
+def get_event_participants(event_id: str, viewer_id: str | None = None):
+    """Return an event's participants, each with a user summary.
+
+    With viewer_id, every row also carries is_friend: whether that participant is a friend of the viewer.
+    """
     response = (
         supabase.table("event_participants")
-        .select("user_id, status, profiles(username, full_name, avatar_url, avatar_kind, icon_id)")
+        .select(_PARTICIPANT_SELECT)
         .eq("event_id", event_id)
         .execute()
     )
-    rows = response.data or []
-    for row in rows:
-        profile = _single_profile(row.get("profiles"))
-        row["user"] = build_user_summary(profile, row.get("user_id"))
-        # Keep the profiles shape that existing screens read unchanged.
-        row["profiles"] = _trim_profile(profile) if profile is not None else None
+    rows = [_participant_row(row) for row in (response.data or [])]
+    if viewer_id is not None:
+        friends = {_norm(fid) for fid in get_friend_ids(viewer_id)}
+        for row in rows:
+            row["is_friend"] = _norm(row.get("user_id")) in friends
     return rows
+
+
+ADMIN_ROLE = "administrator"
+
+
+def is_administrator(user_id: str) -> bool:
+    """True only when the user's profiles.role is exactly 'administrator'. Any lookup failure counts as not an administrator."""
+    try:
+        result = (
+            supabase.table("profiles")
+            .select("role")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        return (result.data or {}).get("role") == ADMIN_ROLE
+    except Exception as e:
+        logger.error(f"Could not verify role of user {user_id}: {e}")
+        return False
+
+
+def can_view_participants(event: dict, user_id: str) -> bool:
+    """The participant list is for the organizer, the participants and administrators only."""
+    if _norm(event.get("created_by")) == _norm(user_id):
+        return True
+    response = (
+        supabase.table("event_participants")
+        .select("user_id")
+        .eq("event_id", event["id"])
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if response.data:
+        return True
+    return is_administrator(user_id)
+
+
+def get_participants_for_viewer(event_id: str, user_id: str):
+    """The full participant list, marked with the viewer's friends. 403 unless the viewer may see it."""
+    event = get_event(event_id)
+    if not can_view_participants(event, user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the organizer, the participants and administrators can see the participant list",
+        )
+    return get_event_participants(event_id, viewer_id=user_id)
+
+
+def get_friends_attending(event_id: str, user_id: str):
+    """The participants of an event who are friends of the user, in the participant row shape."""
+    event = get_event(event_id)
+    friend_ids = get_friend_ids(user_id)
+    if not friend_ids:
+        return []
+    response = (
+        supabase.table("event_participants")
+        .select(_PARTICIPANT_SELECT)
+        .eq("event_id", event_id)
+        .in_("user_id", friend_ids)
+        .execute()
+    )
+    rows = [_participant_row(row) for row in (response.data or [])]
+    seen = {_norm(row["user_id"]) for row in rows}
+    organizer = event.get("created_by")
+    if organizer and _norm(organizer) in {_norm(f) for f in friend_ids} and _norm(organizer) not in seen:
+        profiles = (
+            supabase.table("profiles")
+            .select("username, full_name, avatar_url, avatar_kind, icon_id")
+            .eq("id", organizer)
+            .execute()
+        ).data
+        rows.append(_participant_row({"user_id": organizer, "status": "going", "profiles": profiles}))
+    for row in rows:
+        row["is_friend"] = True
+    return rows
+
+
+def attach_friends_attending_count(events: list, user_id: str | None) -> list:
+    """Add friends_attending_count (how many of the user's friends attend) to each event, in place.
+
+    Never raises; if the lookup fails the count is 0.
+    """
+    items = [e for e in (events or []) if isinstance(e, dict) and e.get("id")]
+    if not items or not user_id:
+        return events
+    counts: dict[str, set] = {}
+    try:
+        friend_ids = get_friend_ids(user_id)
+        friends = {_norm(f) for f in friend_ids}
+        if friends:
+            response = (
+                supabase.table("event_participants")
+                .select("event_id, user_id")
+                .in_("event_id", [e["id"] for e in items])
+                .in_("user_id", friend_ids)
+                .execute()
+            )
+            for row in response.data or []:
+                counts.setdefault(row["event_id"], set()).add(_norm(row["user_id"]))
+            for e in items:
+                if e.get("created_by") and _norm(e["created_by"]) in friends:
+                    counts.setdefault(e["id"], set()).add(_norm(e["created_by"]))
+    except Exception as e:
+        logger.error(f"Friends attending count failed for user {user_id}: {e}", exc_info=True)
+    for e in items:
+        e["friends_attending_count"] = len(counts.get(e["id"], ()))
+    return events
 
 
 def get_my_events(user_id: str):

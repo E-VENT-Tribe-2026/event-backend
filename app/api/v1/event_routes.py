@@ -18,6 +18,7 @@ from app.services.event_service import (
     attach_organizers,
 )
 from app.services.invitation_service import get_invitation_summary
+from app.services.participant_service import attach_friends_attending_count
 
 
 router = APIRouter()
@@ -73,9 +74,12 @@ def get_events(
     search: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     date: str | None = None,
     city: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
+    user=Depends(get_optional_user),
 ):
     result = list_events(page, limit, category, upcoming, search, date, city)
     attach_organizers(result.get("data") or [])
+    if user is not None:
+        attach_friends_attending_count(result.get("data") or [], user.id)
     return result
 
 
