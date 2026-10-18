@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from app.db.supabase_client import supabase
 from app.services.profile_service import get_user_summaries, get_username
 from app.services.notification_service import create_notification, delete_notifications_for
+from app.services.block_visibility import get_hidden_user_ids, has_blocked
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,12 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     profile = supabase.table("profiles").select("id").eq("id", receiver_id).limit(1).execute()
     if not profile.data:
         raise friend_error(404, "user_not_found", "User not found.")
+
+    # A user who was blocked gets the same answer as for a user that does not exist.
+    if has_blocked(receiver_id, sender_id):
+        raise friend_error(404, "user_not_found", "User not found.")
+    if has_blocked(sender_id, receiver_id):
+        raise friend_error(403, "user_blocked", "You blocked this user. Unblock them to send a friend request.")
 
     _raise_for_state(get_friendship_state(sender_id, receiver_id))
 
@@ -406,7 +413,7 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
         other = row["receiver_id"] if _norm(row["initiator_id"]) == _norm(uid) else row["initiator_id"]
         pending_ids.add(_norm(other))
 
-    excluded = friend_ids | pending_ids | {_norm(uid)}
+    excluded = friend_ids | pending_ids | get_hidden_user_ids(uid) | {_norm(uid)}
 
     # --- 2. Query profiles, excluding collected IDs ---
     base = supabase.table("profiles").select(

@@ -5,6 +5,7 @@ from app.services.notification_service import create_notification
 from app.services.event_service import get_event
 from app.services.chat_service import post_system_notification
 from app.services.profile_service import get_username, build_user_summary
+from app.services.block_visibility import is_event_hidden
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,10 @@ def _join_side_effects(user_id: str, event_id: str, event: dict):
 
 def join_event(user_id: str, event_id: str):
     event = get_event(event_id)
+
+    # An event hidden from this user (organizer blocked or blocking them) is not found for them.
+    if is_event_hidden(event, user_id):
+        raise HTTPException(status_code=404, detail="Event not found")
 
     if event.get("status") == "cancelled":
         raise HTTPException(status_code=400, detail="Cannot join a cancelled event")

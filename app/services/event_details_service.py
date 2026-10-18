@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.db.supabase_client import supabase
 from app.schemas.event_details_schema import EventDetailsInput
+from app.services.block_visibility import is_event_hidden
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,14 @@ def get_event_details(payload: Any, user_id: Optional[str]) -> dict:
         )
 
     if row is None:
+        return _failure(request_id, "NOT_FOUND", "Event not found.", "event_id")
+
+    try:
+        hidden = is_event_hidden(row, user_id)
+    except Exception as exc:
+        logger.error("Event details block check failed (type=%s)", type(exc).__name__)
+        return _failure(request_id, "INTERNAL_ERROR", "Event details are temporarily unavailable.", None)
+    if hidden:
         return _failure(request_id, "NOT_FOUND", "Event not found.", "event_id")
 
     if not _is_visible(row):

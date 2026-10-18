@@ -18,6 +18,7 @@ from app.services.event_service import (
     attach_organizers,
 )
 from app.services.invitation_service import get_invitation_summary
+from app.services.block_visibility import is_event_hidden
 
 
 router = APIRouter()
@@ -73,8 +74,10 @@ def get_events(
     search: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     date: str | None = None,
     city: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
+    user=Depends(get_optional_user),
 ):
-    result = list_events(page, limit, category, upcoming, search, date, city)
+    viewer_id = user.id if user is not None else None
+    result = list_events(page, limit, category, upcoming, search, date, city, viewer_id=viewer_id)
     attach_organizers(result.get("data") or [])
     return result
 
@@ -111,6 +114,9 @@ def read_event(event_id: str, user=Depends(get_optional_user)):
     For a signed-in user, invitation says whether they were invited to the event (#186).
     """
     event = get_event(event_id)
+    # An event organized by a user the viewer blocked, or who blocked the viewer, is not found.
+    if user is not None and is_event_hidden(event, user.id):
+        raise HTTPException(status_code=404, detail="Event not found")
     attach_organizers([event])
     if user is not None:
         try:

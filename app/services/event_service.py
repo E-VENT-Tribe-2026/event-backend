@@ -6,6 +6,7 @@ from app.utils.embedding_helper import generate_embedding
 from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
 from app.services.profile_service import get_username, get_user_summaries, build_user_summary
+from app.services.block_visibility import filter_hidden_events, hidden_events_filter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -373,15 +374,19 @@ def _split_profile_events(events: list) -> dict:
     }
 
 
-def get_profile_events(user_id: str):
-    """Events a user organized and events they joined, each split into upcoming and past."""
+def get_profile_events(user_id: str, viewer_id: str | None = None):
+    """Events a user organized and events they joined, each split into upcoming and past.
+
+    Events organized by users the viewer blocked or who blocked the viewer are left out,
+    except those the viewer participates in.
+    """
     organized_resp = (
         supabase.table("events")
         .select(PROFILE_EVENT_COLUMNS)
         .eq("created_by", user_id)
         .execute()
     )
-    organized = organized_resp.data or []
+    organized = filter_hidden_events(organized_resp.data or [], viewer_id)
 
     joined_resp = (
         supabase.table("event_participants")
@@ -391,7 +396,7 @@ def get_profile_events(user_id: str):
         .execute()
     )
     joined = [r["events"] for r in (joined_resp.data or []) if r.get("events")]
-    joined = [e for e in joined if e.get("created_by") != user_id]
+    joined = filter_hidden_events([e for e in joined if e.get("created_by") != user_id], viewer_id)
 
     return {
         "organized": _split_profile_events(organized),
@@ -439,7 +444,10 @@ def list_events(
     search: str | None = None,
     date: str | None = None,
     city: str | None = None,
+    viewer_id: str | None = None,
 ):
+    """List active events. A signed-in viewer (viewer_id) does not get events organized by
+    users they blocked or who blocked them, unless they participate in the event."""
     now = datetime.now(timezone.utc).isoformat()
 
     # If search query provided, use semantic search
@@ -449,7 +457,7 @@ def list_events(
             response = supabase.rpc("search_events", {
                 "query_embedding": embedding,
                 "query_text": search,
-                "match_count": limit
+                "match_count": limit + 20 if viewer_id else limit
             }).execute()
 
             data = [
@@ -457,6 +465,8 @@ def list_events(
                 if e.get("end_datetime", "") >= now
                 and e.get("status") == "active"
             ]
+            if viewer_id:
+                data = filter_hidden_events(data, viewer_id)[:limit]
 
             return {
                 "page": page,
@@ -469,6 +479,10 @@ def list_events(
 
     query = query.eq("status", "active")
     query = query.gte("end_datetime", now)
+
+    visible = hidden_events_filter(viewer_id)
+    if visible:
+        query = query.or_(visible)
 
     if date:
         query = query.gte("start_datetime", date)
