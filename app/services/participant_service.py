@@ -6,6 +6,7 @@ from app.services.event_service import get_event
 from app.services.chat_service import post_system_notification
 from app.services.profile_service import get_username, build_user_summary
 from app.services.friendship_service import get_friend_ids
+from app.core.dependencies import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -217,50 +218,40 @@ def get_event_participants(event_id: str, viewer_id: str | None = None):
     return rows
 
 
-ADMIN_ROLE = "administrator"
-
-
-def is_administrator(user_id: str) -> bool:
-    """True only when the user's profiles.role is exactly 'administrator'. Any lookup failure counts as not an administrator."""
+def is_administrator(user, credentials) -> bool:
+    """Same rule as the admin panel: run require_admin; a refusal means not an administrator."""
     try:
-        result = (
-            supabase.table("profiles")
-            .select("role")
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-        return (result.data or {}).get("role") == ADMIN_ROLE
-    except Exception as e:
-        logger.error(f"Could not verify role of user {user_id}: {e}")
+        require_admin(credentials=credentials, user=user)
+        return True
+    except HTTPException:
         return False
 
 
-def can_view_participants(event: dict, user_id: str) -> bool:
+def can_view_participants(event: dict, user, credentials) -> bool:
     """The participant list is for the organizer, the participants and administrators only."""
-    if _norm(event.get("created_by")) == _norm(user_id):
+    if _norm(event.get("created_by")) == _norm(user.id):
         return True
     response = (
         supabase.table("event_participants")
         .select("user_id")
         .eq("event_id", event["id"])
-        .eq("user_id", user_id)
+        .eq("user_id", user.id)
         .execute()
     )
     if response.data:
         return True
-    return is_administrator(user_id)
+    return is_administrator(user, credentials)
 
 
-def get_participants_for_viewer(event_id: str, user_id: str):
+def get_participants_for_viewer(event_id: str, user, credentials):
     """The full participant list, marked with the viewer's friends. 403 unless the viewer may see it."""
     event = get_event(event_id)
-    if not can_view_participants(event, user_id):
+    if not can_view_participants(event, user, credentials):
         raise HTTPException(
             status_code=403,
             detail="Only the organizer, the participants and administrators can see the participant list",
         )
-    return get_event_participants(event_id, viewer_id=user_id)
+    return get_event_participants(event_id, viewer_id=user.id)
 
 
 def get_friends_attending(event_id: str, user_id: str):

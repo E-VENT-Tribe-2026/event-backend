@@ -1,4 +1,6 @@
 """Participant list privacy and friends attending (Authorization Hardening 12.3, Friends Attending 3.4)."""
+import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +27,15 @@ def _row(uid, name):
                          "avatar_kind": "icon", "icon_id": "icon_fox"}}
 
 
+def _jwt(aal="aal1"):
+    seg = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    return f"{seg({'alg': 'none'})}.{seg({'aal': aal})}.sig"
+
+
+def _auth(aal="aal1"):
+    return {"Authorization": f"Bearer {_jwt(aal)}"}
+
+
 def _result(data):
     return MagicMock(data=data)
 
@@ -39,7 +50,7 @@ def _as(user_id):
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
 
 
-def _get_list(client, viewer, rows, role="user", friends=()):
+def _get_list(client, viewer, rows, role="user", friends=(), aal="aal1"):
     """Request the full participant list as viewer. rows is what event_participants holds for this viewer's queries."""
     mock_sb, chains = make_table_router()
     chains["event_participants"].execute.return_value = _result(rows)
@@ -48,7 +59,7 @@ def _get_list(client, viewer, rows, role="user", friends=()):
     with patch(f"{SVC}.supabase", mock_sb), \
          patch(f"{SVC}.get_event", return_value=EVENT), \
          patch(f"{SVC}.get_friend_ids", return_value=list(friends)):
-        return client.get(f"/api/participants/{EVENT_ID}/participants")
+        return client.get(f"/api/participants/{EVENT_ID}/participants", headers=_auth(aal))
 
 
 class TestParticipantListAccess:
@@ -80,11 +91,21 @@ class TestParticipantListAccess:
         chains["profiles"].execute.return_value = _result({"role": "administrator"})
         _as(ADMIN)
         with patch(f"{SVC}.supabase", mock_sb), \
+             patch("app.core.dependencies.supabase", mock_sb), \
              patch(f"{SVC}.get_event", return_value=EVENT), \
              patch(f"{SVC}.get_friend_ids", return_value=[]):
-            res = client.get(f"/api/participants/{EVENT_ID}/participants")
+            res = client.get(f"/api/participants/{EVENT_ID}/participants", headers=_auth("aal2"))
         assert res.status_code == 200
         assert [r["user_id"] for r in res.json()] == [ORGANIZER]
+
+    def test_administrator_without_mfa_is_refused(self, client):
+        mock_sb, chains = make_table_router()
+        chains["event_participants"].execute.return_value = _result([])
+        chains["profiles"].execute.return_value = _result({"role": "administrator"})
+        _as(ADMIN)
+        with patch(f"{SVC}.supabase", mock_sb),              patch("app.core.dependencies.supabase", mock_sb),              patch(f"{SVC}.get_event", return_value=EVENT),              patch(f"{SVC}.get_friend_ids", return_value=[]):
+            res = client.get(f"/api/participants/{EVENT_ID}/participants", headers=_auth("aal1"))
+        assert res.status_code == 403
 
     def test_count_stays_open_to_any_signed_in_user(self, client):
         _as(STRANGER)
@@ -151,19 +172,29 @@ class TestFriendsAttendingCount:
 
 
 class TestIsAdministrator:
-    @pytest.mark.parametrize("role,expected", [
-        ("administrator", True), ("user", False), ("Administrator", False), ("admin", False), (None, False),
-    ])
-    def test_only_exact_administrator_role_counts(self, role, expected):
+    DEP = "app.core.dependencies"
+
+    def _check(self, role, token, fail=False):
         from app.services.participant_service import is_administrator
         mock_sb, chains = make_table_router()
-        chains["profiles"].execute.return_value = _result({"role": role})
-        with patch(f"{SVC}.supabase", mock_sb):
-            assert is_administrator(ADMIN) is expected
+        if fail:
+            chains["profiles"].execute.side_effect = RuntimeError("db down")
+        else:
+            chains["profiles"].execute.return_value = _result({"role": role})
+        creds = SimpleNamespace(credentials=token)
+        with patch(f"{self.DEP}.supabase", mock_sb):
+            return is_administrator(SimpleNamespace(id=ADMIN), creds)
+
+    def test_administrator_with_mfa_token(self):
+        assert self._check("administrator", _jwt("aal2")) is True
+
+    @pytest.mark.parametrize("role", ["user", "Administrator", "admin", None])
+    def test_other_roles_are_not_administrators(self, role):
+        assert self._check(role, _jwt("aal2")) is False
+
+    @pytest.mark.parametrize("token", ["", "garbage", _jwt("aal1")])
+    def test_administrator_needs_an_mfa_token(self, token):
+        assert self._check("administrator", token) is False
 
     def test_lookup_failure_is_not_administrator(self):
-        from app.services.participant_service import is_administrator
-        mock_sb, chains = make_table_router()
-        chains["profiles"].execute.side_effect = RuntimeError("db down")
-        with patch(f"{SVC}.supabase", mock_sb):
-            assert is_administrator(ADMIN) is False
+        assert self._check(None, _jwt("aal2"), fail=True) is False

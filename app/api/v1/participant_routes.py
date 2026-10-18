@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from app.core.dependencies import get_current_user, get_current_onboarded_user
+from fastapi.security import HTTPAuthorizationCredentials
+from app.core.dependencies import get_current_user, get_current_onboarded_user, security
 from app.db.supabase_client import supabase
 from app.services.participant_service import (
     join_event,
@@ -42,9 +43,13 @@ def leave_event_api(
 
 
 @router.get("/{event_id}/participants")
-def participants_api(event_id: str, user=Depends(get_current_user)):
+def participants_api(
+    event_id: str,
+    user=Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
     """Full participant list: organizer, participants and administrators only; each row has is_friend."""
-    return get_participants_for_viewer(event_id, user.id)
+    return get_participants_for_viewer(event_id, user, credentials)
 
 
 @router.get("/{event_id}/participants/friends")

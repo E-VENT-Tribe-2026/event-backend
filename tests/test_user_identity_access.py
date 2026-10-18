@@ -257,7 +257,7 @@ class TestParticipantsRouteRealPath:
         with patch("app.services.participant_service.supabase", mock_sb), \
              patch("app.services.participant_service.get_event", return_value={"id": "e1", "created_by": "viewer"}), \
              patch("app.services.participant_service.get_friend_ids", return_value=[]):
-            response = client.get("/api/participants/e1/participants")
+            response = client.get("/api/participants/e1/participants", headers={"Authorization": "Bearer t"})
 
         assert response.status_code == 200
         data = response.json()
@@ -291,7 +291,7 @@ class TestParticipantsRouteRealPath:
         with patch("app.services.participant_service.supabase", mock_sb), \
              patch("app.services.participant_service.get_event", return_value={"id": "e1", "created_by": "viewer"}), \
              patch("app.services.participant_service.get_friend_ids", return_value=[]):
-            response = client.get("/api/participants/e1/participants")
+            response = client.get("/api/participants/e1/participants", headers={"Authorization": "Bearer t"})
 
         assert response.status_code == 200
         data = response.json()
