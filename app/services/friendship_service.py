@@ -330,6 +330,21 @@ def get_friends(user_id: str, page: int = 1, limit: int = DEFAULT_PAGE_LIMIT) ->
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}
 
 
+def get_friend_ids(user_id: str) -> list:
+    """Return the ids of all of the user's friends."""
+    uid = _uuid(user_id)
+    resp = (
+        supabase.table("friendships")
+        .select("user_id, friend_id")
+        .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
+        .execute()
+    )
+    return [
+        row["friend_id"] if _norm(row["user_id"]) == _norm(uid) else row["user_id"]
+        for row in resp.data or []
+    ]
+
+
 def remove_friend(user_id: str, friend_id: str) -> dict:
     """Remove an existing friendship."""
     try:

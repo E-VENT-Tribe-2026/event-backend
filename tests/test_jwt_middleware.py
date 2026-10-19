@@ -194,7 +194,7 @@ class TestJWTMiddlewareEnforced:
         _isolated.side_effect = Exception("network down")
         assert self._get(_es256()).status_code == 503
 
-    @patch("app.api.v1.participant_routes.get_event_participants", return_value=[])
+    @patch("app.api.v1.participant_routes.get_participants_for_viewer", return_value=[])
     @patch("app.core.dependencies.supabase")
     def test_valid_token_reaches_route(self, mock_sb, _):
         mock_sb.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="u1"))
