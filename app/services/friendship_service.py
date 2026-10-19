@@ -140,8 +140,9 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     except Exception as e:
         if not _is_unique_violation(e):
             raise
-        # Lost a race with a concurrent request: map it to the matching 409 if the
-        # state now shows a conflict, otherwise re-raise the original error.
+        # Lost a race with a concurrent request or accept (the database rejects a
+        # pending request between friends with 23505): map it to the matching 409
+        # if the state now shows a conflict, otherwise re-raise the original error.
         _raise_for_state(get_friendship_state(sender_id, receiver_id))
         raise
 
@@ -203,21 +204,6 @@ def cancel_friend_request(request_id: int, user_id: str) -> dict:
     return {"message": "Friend request cancelled"}
 
 
-def _restore_request(row: dict):
-    """Re-insert a claimed request after a failed follow-up step."""
-    try:
-        supabase.table("friend_requests").insert({
-            "id": row["id"],
-            "initiator_id": row["initiator_id"],
-            "receiver_id": row["receiver_id"],
-            "status": "pending",
-            "created_at": row["created_at"],
-        }).execute()
-    except Exception:
-        logger.error("Failed to restore friend request on accept: request_id=%s initiator=%s receiver=%s",
-                     row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
-
-
 def accept_friend_request(request_id: int, user_id: str) -> dict:
     """Accept a pending request addressed to the user and create the friendship."""
     row = _load_pending_request(request_id, user_id)
@@ -228,33 +214,20 @@ def accept_friend_request(request_id: int, user_id: str) -> dict:
     initiator = row["initiator_id"]
     receiver = row["receiver_id"]
 
-    _claim_request(request_id, "receiver_id", user_id)
-
-    already_friends = False
-    try:
-        resp = (
-            supabase.table("friendships")
-            .insert({"user_id": initiator, "friend_id": receiver, "origin": initiator, "status": "active"})
-            .execute()
-        )
-        if not resp.data:
-            raise RuntimeError("friendship insert returned no row")
-        friendship = resp.data[0]
-    except Exception as e:
-        if not _is_unique_violation(e):
-            logger.error("Friendship insert failed on accept: request_id=%s initiator=%s receiver=%s",
-                         request_id, initiator, receiver, exc_info=True)
-            _restore_request(row)
-            raise
-        # Friendship already exists (concurrent accept): reuse it, else re-raise the original error.
-        friendship = _find_friendship(initiator, receiver)
-        if not friendship:
-            raise
-        already_friends = True
+    # Deletes the request and creates the friendship in one transaction, under a
+    # per-pair lock shared with request inserts, so no pending request can appear
+    # between the two steps. Returns no row if the request was claimed meanwhile.
+    resp = supabase.rpc("accept_friend_request", {
+        "p_request_id": request_id,
+        "p_receiver_id": _uuid(user_id),
+    }).execute()
+    if not resp.data:
+        raise friend_error(404, "request_not_found", "Friend request not found.")
+    friendship = resp.data[0]
 
     _cleanup_request_notification(row, "accept")
 
-    if not already_friends:
+    if friendship["created"]:
         try:
             create_notification(
                 initiator, None, FRIEND_REQUEST_ACCEPTED,
@@ -266,7 +239,7 @@ def accept_friend_request(request_id: int, user_id: str) -> dict:
                          request_id, initiator, receiver, exc_info=True)
 
     return {
-        "friend_since": friendship["created_at"],
+        "friend_since": friendship["friend_since"],
         "user": get_user_summaries([initiator])[initiator],
     }
 

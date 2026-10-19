@@ -350,21 +350,25 @@ class TestCancelFriendRequest:
 # ────────────────────────────────────────────────────────────────────────────
 
 class TestAcceptFriendRequest:
+    @staticmethod
+    def _rpc(mock_sb, data=None, created=True):
+        if data is None:
+            data = [{"friendship_id": 1, "friend_since": "2026-02-02T10:00:00+00:00", "created": created}]
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=data)
+
     def test_success(self):
         mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
-        chains["friendships"].execute.return_value = MagicMock(data=[_friendship(ME, OTHER)])
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb)
         with svc(mock_sb) as m:
             from app.services.friendship_service import accept_friend_request
             result = accept_friend_request(7, OTHER)
 
-        assert chains["friendships"].insert.call_args[0][0] == {
-            "user_id": ME, "friend_id": OTHER, "origin": ME, "status": "active"}
-        chains["friend_requests"].delete.assert_called_once()
-        chains["friend_requests"].eq.assert_any_call("id", 7)
-        chains["friend_requests"].eq.assert_any_call("receiver_id", OTHER)
-        chains["friend_requests"].eq.assert_any_call("status", "pending")
+        mock_sb.rpc.assert_called_once_with(
+            "accept_friend_request", {"p_request_id": 7, "p_receiver_id": OTHER})
+        # Deletion and friendship creation happen inside the RPC, not as separate calls.
+        chains["friend_requests"].delete.assert_not_called()
+        chains["friendships"].insert.assert_not_called()
         m["delete_notifications_for"].assert_called_once_with(OTHER, "friend_request_received", ME)
         m["create_notification"].assert_called_once_with(
             ME, None, "friend_request_accepted", "jane_doe accepted your friend request",
@@ -373,6 +377,15 @@ class TestAcceptFriendRequest:
             "friend_since": "2026-02-02T10:00:00+00:00",
             "user": {"id": ME, "username": f"user_{ME[:4]}"},
         }
+
+    def test_receiver_id_is_canonicalised(self):
+        mock_sb, chains = make_table_router()
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb)
+        with svc(mock_sb):
+            from app.services.friendship_service import accept_friend_request
+            accept_friend_request(7, OTHER.upper())
+        assert mock_sb.rpc.call_args[0][1]["p_receiver_id"] == OTHER
 
     def test_sender_gets_403(self):
         mock_sb, chains = make_table_router()
@@ -383,7 +396,7 @@ class TestAcceptFriendRequest:
                 accept_friend_request(7, ME)
         assert exc.value.status_code == 403
         assert exc.value.detail["code"] == "not_request_receiver"
-        chains["friendships"].insert.assert_not_called()
+        mock_sb.rpc.assert_not_called()
         m["create_notification"].assert_not_called()
 
     def test_stranger_gets_404(self):
@@ -395,85 +408,52 @@ class TestAcceptFriendRequest:
                 accept_friend_request(7, STRANGER)
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "request_not_found"
-        chains["friendships"].insert.assert_not_called()
+        mock_sb.rpc.assert_not_called()
 
-    def test_existing_friendship_unique_violation_still_cleans_up(self):
+    def test_existing_friendship_still_cleans_up_without_notifying(self):
         mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
-        chains["friendships"].execute.side_effect = [
-            UniqueViolation("duplicate key"), MagicMock(data=[_friendship(OTHER, ME)])]
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb, created=False)
         with svc(mock_sb) as m:
             from app.services.friendship_service import accept_friend_request
             result = accept_friend_request(7, OTHER)
 
-        chains["friend_requests"].delete.assert_called_once()
-        chains["friend_requests"].eq.assert_any_call("receiver_id", OTHER)
         m["delete_notifications_for"].assert_called_once_with(OTHER, "friend_request_received", ME)
         m["create_notification"].assert_not_called()
         assert result["friend_since"] == "2026-02-02T10:00:00+00:00"
         assert result["user"]["id"] == ME
 
-    def test_lost_claim_raises_404_and_creates_no_friendship(self):
+    def test_lost_claim_raises_404_without_side_effects(self):
         mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[])]
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb, data=[])
         with svc(mock_sb) as m:
             from app.services.friendship_service import accept_friend_request
             with pytest.raises(HTTPException) as exc:
                 accept_friend_request(7, OTHER)
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "request_not_found"
-        chains["friendships"].insert.assert_not_called()
         m["delete_notifications_for"].assert_not_called()
         m["create_notification"].assert_not_called()
 
-    def test_unique_violation_without_existing_friendship_reraises(self):
+    def test_rpc_failure_reraises_without_side_effects(self):
         mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
-        original = UniqueViolation("duplicate key")
-        chains["friendships"].execute.side_effect = [original, MagicMock(data=[])]
-        with svc(mock_sb):
-            from app.services.friendship_service import accept_friend_request
-            with pytest.raises(UniqueViolation) as exc:
-                accept_friend_request(7, OTHER)
-        assert exc.value is original
-
-    def test_insert_failure_restores_request_and_reraises(self):
-        mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)]), MagicMock(data=[_req(7)])]
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
         boom = RuntimeError("db down")
-        chains["friendships"].execute.side_effect = [boom]
+        mock_sb.rpc.return_value.execute.side_effect = boom
         with svc(mock_sb) as m:
             from app.services.friendship_service import accept_friend_request
             with pytest.raises(RuntimeError) as exc:
                 accept_friend_request(7, OTHER)
         assert exc.value is boom
-        assert chains["friend_requests"].insert.call_args[0][0] == {
-            "id": 7, "initiator_id": ME, "receiver_id": OTHER,
-            "status": "pending", "created_at": "2026-01-01T10:00:00+00:00"}
+        chains["friend_requests"].insert.assert_not_called()
         m["create_notification"].assert_not_called()
         m["delete_notifications_for"].assert_not_called()
 
-    def test_restore_failure_still_reraises_original(self):
-        mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)]), RuntimeError("restore failed")]
-        boom = RuntimeError("db down")
-        chains["friendships"].execute.side_effect = [boom]
-        with svc(mock_sb):
-            from app.services.friendship_service import accept_friend_request
-            with pytest.raises(RuntimeError) as exc:
-                accept_friend_request(7, OTHER)
-        assert exc.value is boom
-
     def test_notification_failures_do_not_fail_accept(self):
         mock_sb, chains = make_table_router()
-        chains["friend_requests"].execute.side_effect = [
-            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
-        chains["friendships"].execute.return_value = MagicMock(data=[_friendship(ME, OTHER)])
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb)
         with svc(mock_sb) as m:
             m["delete_notifications_for"].side_effect = RuntimeError("boom")
             m["create_notification"].side_effect = RuntimeError("boom")
