@@ -13,6 +13,7 @@ from app.api.v1 import (
     friendship_routes,
     admin_routes,
     invitation_routes,
+    block_routes,
 )
 
 api_router = APIRouter()
@@ -99,4 +100,10 @@ api_router.include_router(
     invitation_routes.router,
     prefix="/invitations",
     tags=["Invitations"]
+)
+
+api_router.include_router(
+    block_routes.router,
+    prefix="/blocks",
+    tags=["Blocks"]
 )

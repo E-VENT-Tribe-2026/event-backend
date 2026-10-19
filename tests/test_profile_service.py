@@ -233,7 +233,7 @@ class TestBuildPublicProfile:
         assert result["id"] == "u1"
         assert result["events"] == EMPTY_EVENTS
         assert result["friendship"] == {"status": fstatus, "request_id": None}
-        events.assert_called_once_with("u1")
+        events.assert_called_once_with("u1", "viewer")
 
     def test_friendship_state_called_with_viewer_then_user(self, mocks):
         profile, _events, state = mocks
@@ -268,7 +268,7 @@ class TestBuildPublicProfile:
 
         assert result["friendship"]["status"] == fstatus
         assert result["events"] == EMPTY_EVENTS
-        events.assert_called_once_with("u1")
+        events.assert_called_once_with("u1", "viewer")
 
     def test_not_found_propagates(self, mocks):
         profile, events, _state = mocks
