@@ -5,6 +5,7 @@ from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from app.utils.validators import validate_username, validate_full_name
 from app.utils.query_safety import escape_like
+from app.services.block_visibility import get_blocked_by_ids
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +351,10 @@ def search_profiles(query: str, page: int, limit: int, viewer_id: str):
         .ilike("username", f"%{escape_like(query)}%")
         .neq("id", viewer_id)
     )
+    # Users who blocked the viewer do not appear; users the viewer blocked still do.
+    blocked_by = get_blocked_by_ids(viewer_id)
+    if blocked_by:
+        q = q.not_.in_("id", sorted(blocked_by))
 
     # Fetch one extra row to learn whether another page exists.
     response = q.order("username").order("id").range(start, start + limit).execute()

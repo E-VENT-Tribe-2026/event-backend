@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.db.supabase_client import supabase
 from app.schemas.event_search_schema import SearchEventsInput
+from app.services.block_visibility import hidden_events_filter
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,9 @@ class SearchInputError(Exception):
         self.field = field
 
 
-def search_events(payload: Any) -> dict:
+def search_events(payload: Any, viewer_id: Optional[str] = None) -> dict:
+    """Search active events. With a viewer_id, events organized by users the viewer blocked or
+    who blocked the viewer are left out (unless the viewer participates in them)."""
     print(f"🔍 [search_events] Received payload: {payload}")
     request_id = str(uuid.uuid4())
     try:
@@ -44,7 +47,7 @@ def search_events(payload: Any) -> dict:
         return _failure(request_id, "INVALID_INPUT", exc.message, exc.field)
 
     try:
-        events, total = _fetch_events(criteria)
+        events, total = _fetch_events(criteria, viewer_id)
     except Exception as exc:
         logger.error("Event search failed (type=%s)", type(exc).__name__)
         return _failure(
@@ -94,7 +97,7 @@ def _input_error(exc: ValidationError) -> SearchInputError:
     return SearchInputError(_FIELD_MESSAGES.get(field, "Invalid search input."), field)
 
 
-def _fetch_events(criteria: SearchEventsInput) -> tuple[list[dict], int]:
+def _fetch_events(criteria: SearchEventsInput, viewer_id: Optional[str] = None) -> tuple[list[dict], int]:
     now = datetime.now(timezone.utc).isoformat()
     query = (
         supabase.table("events")
@@ -102,6 +105,10 @@ def _fetch_events(criteria: SearchEventsInput) -> tuple[list[dict], int]:
         .eq("status", "active")
         .gte("end_datetime", now)
     )
+
+    visible = hidden_events_filter(viewer_id)
+    if visible:
+        query = query.or_(visible)
 
     if criteria.upcoming:
         query = query.gt("start_datetime", now)

@@ -3,6 +3,7 @@ from app.db.supabase_client import supabase
 from app.utils.embedding_helper import generate_embedding
 from fastapi import HTTPException
 from datetime import datetime, timezone
+from app.services.block_visibility import filter_hidden_events
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +182,9 @@ def get_recommendations(user_id: str, limit: int = 10) -> dict:
         if event["id"] not in already_seen
         and event.get("end_datetime", "") >= now
         and event.get("status") == "active"
-    ][:limit]
+    ]
+    # Over-fetched above, so hiding blocked organizers' events still leaves a full page.
+    results = filter_hidden_events(results, user_id)[:limit]
 
     return {
         "user_id": user_id,

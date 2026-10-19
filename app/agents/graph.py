@@ -35,7 +35,10 @@ def main_agent_node(state: AgentState) -> AgentState:
 def tools_node(state: AgentState) -> AgentState:
     """Execute deterministic backend tools per specification."""
     tool_name = state.get("tool_name")
-    tool_input = state.get("tool_input") or {}
+    # The signed-in user comes from the request, never from what the model put in the tool input.
+    tool_input = {k: v for k, v in (state.get("tool_input") or {}).items() if k != "user_id"}
+    if state.get("user_id"):
+        tool_input["user_id"] = state["user_id"]
     print(f"⚙️  [ToolsNode] Executing tool: '{tool_name}'...")
 
     tool_fn = TOOL_REGISTRY.get(tool_name)
