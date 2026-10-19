@@ -96,5 +96,5 @@ def get_suggestions(
     limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
     user=Depends(get_current_onboarded_user),
 ):
-    """Get list of users who are not yet friends and have no active requests."""
+    """k-nearest neighbors: eligible users ranked by interest-embedding similarity."""
     return get_friend_suggestions(user.id, page, limit)

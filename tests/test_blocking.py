@@ -308,6 +308,20 @@ class TestProfileSearchSuggestions:
         suggested = {i["user"]["id"] for i in client.get("/api/friends/suggestions", headers=HEADERS).json()["data"]}
         assert A not in suggested and {C, D} <= suggested
 
+    def test_suggestions_rank_nearest_neighbors_first(self, db):
+        as_user(B)
+        for row in db.tables["profiles"]:
+            if row["id"] == B:
+                row["interest_embedding"] = [1.0, 0.0]
+            elif row["id"] == A:
+                row["interest_embedding"] = [1.0, 0.0]
+            elif row["id"] == D:
+                row["interest_embedding"] = [0.8, 0.2]
+            else:
+                row["interest_embedding"] = [0.0, 1.0]
+        ids = [i["user"]["id"] for i in client.get("/api/friends/suggestions", headers=HEADERS).json()["data"]]
+        assert ids == [A, D, C]
+
 
 # ---------------------------------------------------------------- events
 

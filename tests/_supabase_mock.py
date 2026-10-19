@@ -12,8 +12,11 @@ def make_table_router():
         def __missing__(self, name):
             chain = MagicMock()
             for method in ("select", "eq", "in_", "order", "range", "single", "insert", "update", "delete",
-                           "or_", "neq", "ilike", "gt", "gte", "lt", "lte", "is_", "limit", "not_"):
+                           "or_", "neq", "ilike", "gt", "gte", "lt", "lte", "is_", "limit"):
                 getattr(chain, method).return_value = chain
+            not_proxy = MagicMock()
+            not_proxy.in_.return_value = chain
+            chain.not_ = not_proxy
             self[name] = chain
             return chain
 

@@ -8,6 +8,7 @@ from tests._supabase_mock import make_table_router
 ME = "11111111-1111-4111-8111-111111111111"
 OTHER = "22222222-2222-4222-8222-222222222222"
 STRANGER = "33333333-3333-4333-8333-333333333333"
+FOURTH = "44444444-4444-4444-8444-444444444444"
 MOD = "app.services.friendship_service"
 
 
@@ -461,6 +462,49 @@ class TestAcceptFriendRequest:
             result = accept_friend_request(7, OTHER)
         assert result["user"]["id"] == ME
 
+    def test_rpc_dict_response_succeeds(self):
+        mock_sb, chains = make_table_router()
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb, data={"friendship_id": 1, "friend_since": "2026-02-02T10:00:00+00:00", "created": True})
+        with svc(mock_sb):
+            from app.services.friendship_service import accept_friend_request
+            result = accept_friend_request(7, OTHER)
+        assert result["friend_since"] == "2026-02-02T10:00:00+00:00"
+        assert result["user"]["id"] == ME
+
+    def test_rpc_friendship_row_shape_succeeds(self):
+        mock_sb, chains = make_table_router()
+        chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
+        self._rpc(mock_sb, data=[{"id": 1, "created_at": "2026-02-02T10:00:00+00:00"}])
+        with svc(mock_sb) as m:
+            from app.services.friendship_service import accept_friend_request
+            result = accept_friend_request(7, OTHER)
+        m["create_notification"].assert_called_once()
+        assert result["friend_since"] == "2026-02-02T10:00:00+00:00"
+
+    def test_missing_rpc_falls_back_to_insert(self):
+        from postgrest.exceptions import APIError
+        mock_sb, chains = make_table_router()
+        chains["friend_requests"].execute.side_effect = [
+            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
+        chains["friendships"].execute.return_value = MagicMock(data=[_friendship()])
+        mock_sb.rpc.return_value.execute.side_effect = APIError({
+            "message": "Could not find the function public.accept_friend_request(p_request_id, p_receiver_id) in the schema cache",
+            "code": "PGRST202",
+            "hint": None,
+            "details": None,
+        })
+        with svc(mock_sb) as m:
+            from app.services.friendship_service import accept_friend_request
+            result = accept_friend_request(7, OTHER)
+        chains["friend_requests"].delete.assert_called_once()
+        chains["friendships"].insert.assert_called_once()
+        m["create_notification"].assert_called_once()
+        assert result == {
+            "friend_since": "2026-02-02T10:00:00+00:00",
+            "user": {"id": ME, "username": f"user_{ME[:4]}"},
+        }
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # decline_friend_request
@@ -718,3 +762,111 @@ class TestRemoveFriend:
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "friendship_not_found"
         mock_sb.table.assert_not_called()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# get_friend_suggestions (k-NN)
+# ────────────────────────────────────────────────────────────────────────────
+
+def _profile(uid, embedding, username="u"):
+    return {
+        "id": uid, "username": username, "full_name": username.title(),
+        "avatar_kind": "icon", "icon_id": None, "avatar_url": None,
+        "interests": [], "bio": "", "interest_embedding": embedding,
+    }
+
+
+class TestGetFriendSuggestions:
+    def _run(self, mock_sb, chains, viewer_emb, candidates, friends=None, pending=None, hidden=None):
+        chains["friendships"].execute.return_value = MagicMock(data=friends or [])
+        chains["friend_requests"].execute.return_value = MagicMock(data=pending or [])
+        chains["profiles"].execute.side_effect = [
+            MagicMock(data=[_profile(ME, viewer_emb, "me")]),
+            MagicMock(data=candidates),
+        ]
+        with svc(mock_sb), patch(f"{MOD}.get_hidden_user_ids", return_value=set(hidden or [])):
+            from app.services.friendship_service import get_friend_suggestions
+            return get_friend_suggestions(ME)
+
+    def test_ranks_nearest_neighbors_first(self):
+        mock_sb, chains = make_table_router()
+        result = self._run(mock_sb, chains, [1.0, 0.0], [
+            _profile(STRANGER, [0.0, 1.0], "far"),
+            _profile(OTHER, [0.9, 0.1], "near"),
+        ])
+        assert [item["user"]["id"] for item in result["data"]] == [OTHER, STRANGER]
+        assert result["has_more"] is False
+        assert result["page"] == 1 and result["limit"] == 20
+
+    def test_profiles_without_embeddings_sort_last(self):
+        mock_sb, chains = make_table_router()
+        result = self._run(mock_sb, chains, [1.0, 0.0], [
+            _profile(STRANGER, None, "none"),
+            _profile(OTHER, [1.0, 0.0], "twin"),
+        ])
+        assert [item["user"]["id"] for item in result["data"]] == [OTHER, STRANGER]
+
+    def test_excludes_friends_pending_hidden_and_self(self):
+        mock_sb, chains = make_table_router()
+        result = self._run(
+            mock_sb, chains, [1.0, 0.0],
+            candidates=[
+                _profile(ME, [1.0, 0.0], "me"),
+                _profile(OTHER, [1.0, 0.0], "friend"),
+                _profile(STRANGER, [0.5, 0.5], "pending"),
+                _profile(FOURTH, [1.0, 0.0], "ok"),
+            ],
+            friends=[_friendship(ME, OTHER)],
+            pending=[_req(7, STRANGER, ME)],
+            hidden=[],
+        )
+        assert [item["user"]["id"] for item in result["data"]] == [FOURTH]
+
+    def test_paginates_knn_order(self):
+        mock_sb, chains = make_table_router()
+        chains["friendships"].execute.return_value = MagicMock(data=[])
+        chains["friend_requests"].execute.return_value = MagicMock(data=[])
+        candidates = [
+            _profile(OTHER, [1.0, 0.0], "nearest"),
+            _profile(STRANGER, [0.0, 1.0], "farthest"),
+        ]
+        chains["profiles"].execute.side_effect = [
+            MagicMock(data=[_profile(ME, [1.0, 0.0], "me")]),
+            MagicMock(data=candidates),
+        ]
+        with svc(mock_sb), patch(f"{MOD}.get_hidden_user_ids", return_value=set()):
+            from app.services.friendship_service import get_friend_suggestions
+            page1 = get_friend_suggestions(ME, page=1, limit=1)
+            chains["profiles"].execute.side_effect = [
+                MagicMock(data=[_profile(ME, [1.0, 0.0], "me")]),
+                MagicMock(data=candidates),
+            ]
+            page2 = get_friend_suggestions(ME, page=2, limit=1)
+        assert page1["data"][0]["user"]["id"] == OTHER
+        assert page1["has_more"] is True
+        assert page2["data"][0]["user"]["id"] == STRANGER
+        assert page2["has_more"] is False
+
+    def test_missing_viewer_embedding_keeps_stable_id_order(self):
+        mock_sb, chains = make_table_router()
+        result = self._run(mock_sb, chains, None, [
+            _profile(STRANGER, [0.0, 1.0], "s"),
+            _profile(OTHER, [1.0, 0.0], "o"),
+        ])
+        assert [item["user"]["id"] for item in result["data"]] == [OTHER, STRANGER]
+
+    def test_generates_viewer_embedding_from_interests_when_missing(self):
+        mock_sb, chains = make_table_router()
+        chains["friendships"].execute.return_value = MagicMock(data=[])
+        chains["friend_requests"].execute.return_value = MagicMock(data=[])
+        chains["profiles"].execute.side_effect = [
+            MagicMock(data=[{"id": ME, "interests": ["music"], "bio": "", "interest_embedding": None}]),
+            MagicMock(data=[_profile(OTHER, [1.0, 0.0], "near"), _profile(STRANGER, [0.0, 1.0], "far")]),
+        ]
+        with svc(mock_sb), patch(f"{MOD}.get_hidden_user_ids", return_value=set()), patch(
+            f"{MOD}.generate_embedding", return_value=[1.0, 0.0]
+        ) as mock_embed:
+            from app.services.friendship_service import get_friend_suggestions
+            result = get_friend_suggestions(ME)
+        mock_embed.assert_called_once_with("music")
+        assert [item["user"]["id"] for item in result["data"]] == [OTHER, STRANGER]

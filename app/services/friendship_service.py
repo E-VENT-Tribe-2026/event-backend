@@ -2,9 +2,15 @@ import logging
 import uuid
 from fastapi import HTTPException
 from app.db.supabase_client import supabase
-from app.services.profile_service import get_user_summaries, get_username
+from app.services.profile_service import (
+    USER_SUMMARY_COLUMNS,
+    build_user_summary,
+    get_user_summaries,
+    get_username,
+)
 from app.services.notification_service import create_notification, delete_notifications_for
 from app.services.block_visibility import get_hidden_user_ids, has_blocked
+from app.utils.embedding_helper import cosine_similarity, generate_embedding, parse_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +20,7 @@ DEFAULT_PAGE_LIMIT = 20
 MAX_PAGE_LIMIT = 50
 REQUEST_COLUMNS = "id, initiator_id, receiver_id, status, created_at"
 FRIENDSHIP_COLUMNS = "id, user_id, friend_id, created_at"
+SUGGESTION_COLUMNS = f"{USER_SUMMARY_COLUMNS}, interest_embedding"
 
 
 def friend_error(status_code: int, code: str, message: str, request_id: int | None = None) -> HTTPException:
@@ -200,6 +207,127 @@ def _cleanup_request_notification(row: dict, context: str):
                      context, row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
 
 
+def _restore_request(row: dict):
+    """Re-insert a claimed request after a failed follow-up step."""
+    try:
+        supabase.table("friend_requests").insert({
+            "id": row["id"],
+            "initiator_id": row["initiator_id"],
+            "receiver_id": row["receiver_id"],
+            "status": "pending",
+            "created_at": row["created_at"],
+        }).execute()
+    except Exception:
+        logger.error("Failed to restore friend request on accept: request_id=%s initiator=%s receiver=%s",
+                     row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
+
+
+def _rpc_unavailable(exc: Exception) -> bool:
+    """True when accept_friend_request() is missing or cannot return a matching row type."""
+    text = str(exc)
+    code = str(getattr(exc, "code", "") or "")
+    return (
+        code in {"PGRST202", "PGRST203", "42883", "42804"}
+        or "PGRST202" in text
+        or "PGRST203" in text
+        or "schema cache" in text
+        or "Could not find the function" in text
+        or "structure of query does not match function result type" in text
+        or "undefined function" in text.lower()
+    )
+
+
+def _first_rpc_row(data):
+    """PostgREST may return a table as a list or a single composite as a dict."""
+    if isinstance(data, list):
+        return data[0] if data else None
+    if isinstance(data, dict):
+        return data
+    return None
+
+
+def _parse_accept_row(row: dict) -> dict:
+    """Read the RPC result whether it used RETURNS TABLE names or friendship columns."""
+    if not isinstance(row, dict):
+        raise TypeError("accept_friend_request RPC row is not an object")
+    friend_since = row.get("friend_since") or row.get("created_at")
+    if friend_since is None:
+        raise ValueError("accept_friend_request RPC row missing friend_since")
+    created = row.get("created")
+    if created is None:
+        created = True
+    elif isinstance(created, str):
+        created = created.strip().lower() in {"true", "t", "1", "yes"}
+    return {"friend_since": friend_since, "created": bool(created)}
+
+
+def _accept_via_tables(request_id: int, user_id: str, row: dict) -> dict:
+    """Delete the request and insert the friendship when the atomic RPC is unavailable."""
+    _claim_request(request_id, "receiver_id", row["receiver_id"])
+
+    already_friends = False
+    try:
+        resp = (
+            supabase.table("friendships")
+            .insert({
+                "user_id": row["initiator_id"],
+                "friend_id": row["receiver_id"],
+                "origin": row["initiator_id"],
+                "status": "active",
+            })
+            .execute()
+        )
+        if not resp.data:
+            raise RuntimeError("friendship insert returned no row")
+        friendship = _first_rpc_row(resp.data)
+        if not friendship:
+            raise RuntimeError("friendship insert returned no row")
+    except Exception as e:
+        if not _is_unique_violation(e):
+            logger.error("Friendship insert failed on accept: request_id=%s initiator=%s receiver=%s",
+                         request_id, row["initiator_id"], row["receiver_id"], exc_info=True)
+            _restore_request(row)
+            raise
+        friendship = _find_friendship(row["initiator_id"], row["receiver_id"])
+        if not friendship:
+            raise
+        already_friends = True
+
+    return {
+        "friend_since": friendship.get("friend_since") or friendship["created_at"],
+        "created": not already_friends,
+    }
+
+
+def _accept_atomically(request_id: int, user_id: str, row: dict) -> dict:
+    """Prefer the transactional RPC; fall back to table writes if it is not deployed."""
+    try:
+        resp = supabase.rpc("accept_friend_request", {
+            "p_request_id": request_id,
+            "p_receiver_id": _uuid(user_id),
+        }).execute()
+    except Exception as e:
+        if not _rpc_unavailable(e):
+            raise
+        logger.warning(
+            "accept_friend_request RPC unavailable, using table fallback: request_id=%s receiver=%s error=%s",
+            request_id, user_id, e,
+        )
+        return _accept_via_tables(request_id, user_id, row)
+
+    parsed = _first_rpc_row(getattr(resp, "data", None))
+    if not parsed:
+        raise friend_error(404, "request_not_found", "Friend request not found.")
+    try:
+        return _parse_accept_row(parsed)
+    except (TypeError, ValueError):
+        logger.error("accept_friend_request RPC returned an unexpected row: %s", parsed, exc_info=True)
+        friendship = _find_friendship(row["initiator_id"], row["receiver_id"])
+        if friendship:
+            return {"friend_since": friendship["created_at"], "created": True}
+        raise friend_error(404, "request_not_found", "Friend request not found.")
+
+
 def cancel_friend_request(request_id: int, user_id: str) -> dict:
     """Cancel a pending request the user sent."""
     row = _load_pending_request(request_id, user_id)
@@ -218,19 +346,14 @@ def accept_friend_request(request_id: int, user_id: str) -> dict:
         raise friend_error(403, "not_request_receiver",
                            "Only the recipient can accept or decline this friend request.")
 
-    initiator = row["initiator_id"]
-    receiver = row["receiver_id"]
+    initiator = str(row["initiator_id"])
+    receiver = str(row["receiver_id"])
 
     # Deletes the request and creates the friendship in one transaction, under a
     # per-pair lock shared with request inserts, so no pending request can appear
-    # between the two steps. Returns no row if the request was claimed meanwhile.
-    resp = supabase.rpc("accept_friend_request", {
-        "p_request_id": request_id,
-        "p_receiver_id": _uuid(user_id),
-    }).execute()
-    if not resp.data:
-        raise friend_error(404, "request_not_found", "Friend request not found.")
-    friendship = resp.data[0]
+    # between the two steps. Falls back to table writes if the SQL function is
+    # missing (undeployed migration / schema cache) or cannot return its row type.
+    friendship = _accept_atomically(request_id, user_id, row)
 
     _cleanup_request_notification(row, "accept")
 
@@ -368,15 +491,45 @@ def remove_friend(user_id: str, friend_id: str) -> dict:
         raise friend_error(404, "friendship_not_found", "You are not friends with this user.")
     return {"message": "Friend removed"}
 
+
+def _viewer_interest_embedding(user_id: str) -> list[float] | None:
+    """Interest vector for k-NN: stored embedding, else one generated from interests/bio."""
+    resp = (
+        supabase.table("profiles")
+        .select("interests, bio, interest_embedding")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+    )
+    profile = (resp.data or [None])[0] or {}
+    embedding = parse_embedding(profile.get("interest_embedding"))
+    if embedding:
+        return embedding
+    interests = profile.get("interests") or []
+    bio = profile.get("bio") or ""
+    text = (" ".join(interests) + " " + bio).strip()
+    return generate_embedding(text) if text else None
+
+
+def _knn_sort_key(query: list[float] | None, row: dict) -> tuple:
+    """Nearest first (higher cosine), then id. Profiles with no comparable vector go last."""
+    parsed = parse_embedding(row.get("interest_embedding"))
+    similarity = cosine_similarity(query, parsed) if query and parsed else None
+    if similarity is None:
+        return (1, 0.0, str(row.get("id") or ""))
+    return (0, -similarity, str(row.get("id") or ""))
+
+
 def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAGE_LIMIT) -> dict:
-    """Return paginated profiles that are not the current user, not already friends,
-    and have no pending friend request (in either direction) with the current user."""
+    """Return the k nearest eligible users, ranked by interest-embedding cosine similarity.
+
+    Eligible means not the current user, not already friends, no pending request either
+    way, and not hidden by a block. `limit` is k for the page; later pages continue the
+    same nearest-neighbor order.
+    """
     uid = _uuid(user_id)
     start = (page - 1) * limit
 
-    # --- 1. Collect IDs to exclude ---
-
-    # Existing friends (one row per pair, either direction)
     fs_resp = (
         supabase.table("friendships")
         .select("user_id, friend_id")
@@ -388,7 +541,6 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
         other = row["friend_id"] if _norm(row["user_id"]) == _norm(uid) else row["user_id"]
         friend_ids.add(_norm(other))
 
-    # Pending requests (sent or received)
     rq_resp = (
         supabase.table("friend_requests")
         .select("initiator_id, receiver_id")
@@ -402,34 +554,21 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
         pending_ids.add(_norm(other))
 
     excluded = friend_ids | pending_ids | get_hidden_user_ids(uid) | {_norm(uid)}
+    query_embedding = _viewer_interest_embedding(uid)
 
-    # --- 2. Query profiles, excluding collected IDs ---
-    base = supabase.table("profiles").select(
-        "id, username, full_name, avatar_kind, icon_id, avatar_url",
-        count="exact",
-    )
+    candidates = supabase.table("profiles").select(SUGGESTION_COLUMNS)
     if excluded:
-        base = base.not_.in_("id", list(excluded))
+        candidates = candidates.not_.in_("id", list(excluded))
+    rows = [
+        row for row in (candidates.execute().data or [])
+        if _norm(row.get("id")) not in excluded
+    ]
 
-    count_resp = base.execute()
-    total = count_resp.count or 0
-
-    if total == 0:
-        return {"page": page, "limit": limit, "has_more": False, "data": []}
-
-    page_query = (
-        supabase.table("profiles")
-        .select("id, username, full_name, avatar_kind, icon_id, avatar_url")
-        .order("id")
-        .range(start, start + limit - 1)
-    )
-    if excluded:
-        page_query = page_query.not_.in_("id", list(excluded))
-
-    page_resp = page_query.execute()
-    rows = page_resp.data or []
-    has_more = (start + len(rows)) < total
-
-    from app.services.profile_service import build_user_summary
-    data = [{"user": build_user_summary(row)} for row in rows]
-    return {"page": page, "limit": limit, "has_more": has_more, "data": data}
+    ranked = sorted(rows, key=lambda row: _knn_sort_key(query_embedding, row))
+    window, has_more = _page(ranked[start:start + limit + 1], limit)
+    return {
+        "page": page,
+        "limit": limit,
+        "has_more": has_more,
+        "data": [{"user": build_user_summary(row)} for row in window],
+    }

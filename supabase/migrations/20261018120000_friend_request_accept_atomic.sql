@@ -126,12 +126,12 @@ begin
     insert into public.friendships (user_id, friend_id, origin, status)
     values (v_initiator, p_receiver_id, v_initiator, 'active')
     on conflict do nothing
-    returning friendships.id, friendships.created_at, true;
+    returning id::bigint, created_at::timestamptz, true::boolean;
 
   if not found then
     -- The pair is already friends: report the existing friendship.
     return query
-      select f.id, f.created_at, false
+      select f.id::bigint, f.created_at::timestamptz, false::boolean
       from public.friendships f
       where (f.user_id = v_initiator and f.friend_id = p_receiver_id)
          or (f.user_id = p_receiver_id and f.friend_id = v_initiator)
@@ -150,3 +150,6 @@ using public.friendships f
 where r.status = 'pending'
   and ((f.user_id = r.initiator_id and f.friend_id = r.receiver_id)
     or (f.user_id = r.receiver_id and f.friend_id = r.initiator_id));
+
+-- Reload PostgREST so /rest/v1/rpc/accept_friend_request is visible immediately
+notify pgrst, 'reload schema';
