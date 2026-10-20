@@ -368,7 +368,7 @@ class TestSearchProfiles:
         from app.services.profile_service import search_profiles
         search_profiles("alice", 1, 10, "viewer-1")
 
-        chain.neq.assert_called_once_with("id", "viewer-1")
+        chain.neq.assert_any_call("id", "viewer-1")
 
     @patch("app.services.profile_service.supabase")
     def test_search_strips_asterisk_wildcards(self, mock_sb):

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Columns needed to build a UserSummary for a user (see build_user_summary below).
 # Keep in sync with app.schemas.profile_schema.UserSummary.
-USER_SUMMARY_COLUMNS = "id, username, full_name, avatar_url, avatar_kind, icon_id"
+USER_SUMMARY_COLUMNS = "id, username, full_name, avatar_url, avatar_kind, icon_id, role"
 
 
 def build_user_summary(profile: dict | None, user_id: str | None = None) -> dict:
@@ -20,13 +20,23 @@ def build_user_summary(profile: dict | None, user_id: str | None = None) -> dict
 
     Keep in sync with app.schemas.profile_schema.UserSummary.
     Pass user_id whenever profile may be None or lack an id, since UserSummary.id is required.
+    For administrator accounts, username is omitted so only full name and picture are shown.
     """
     profile = profile or {}
 
+    role = str(profile.get("role") or "").strip().lower()
+    is_admin = role in ("administrator", "admin")
+
     username = str(profile.get("username") or "").strip() or None
     full_name = profile.get("full_name")
-    # An account without a username is shown by its full name.
-    display_name = username or full_name
+
+    if is_admin:
+        # Wherever users see an administrator, return only full name and picture, without username
+        username = None
+        display_name = full_name
+    else:
+        # An account without a username is shown by its full name.
+        display_name = username or full_name
 
     avatar_kind = str(profile.get("avatar_kind") or "").strip().lower()
     if avatar_kind not in ("photo", "icon"):
@@ -333,7 +343,7 @@ def get_public_profile(user_id: str):
 
 def search_profiles(query: str, page: int, limit: int, viewer_id: str):
     """
-    Search public profiles by username, always excluding the viewer.
+    Search public profiles by username, always excluding the viewer and administrator accounts.
     Returns only public profiles. PostgREST treats '*' as '%' in like/ilike
     and usernames never contain '*', so '*' is stripped from the query; a
     query that is empty afterwards returns an empty page without querying.
@@ -350,6 +360,8 @@ def search_profiles(query: str, page: int, limit: int, viewer_id: str):
         .in_("visibility", ["public", "friends_only"])
         .ilike("username", f"%{escape_like(query)}%")
         .neq("id", viewer_id)
+        .neq("role", "administrator")
+        .neq("role", "admin")
     )
     # Users who blocked the viewer do not appear; users the viewer blocked still do.
     blocked_by = get_blocked_by_ids(viewer_id)

@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_regular_user
 from app.schemas.assistant_schema import AssistantChatRequest, AssistantChatResponse
 from app.schemas.event_details_schema import EventDetailsResponse
 from app.schemas.event_draft_schema import DraftNewEventResponse
@@ -32,5 +32,5 @@ def event_details_tool(body: Any = Body(...), user=Depends(get_current_user)):
 
 
 @router.post("/tools/draft-event", response_model=DraftNewEventResponse)
-def draft_event_tool(body: Any = Body(...), user=Depends(get_current_user)):
+def draft_event_tool(body: Any = Body(...), user=Depends(require_regular_user)):
     return draft_new_event(body, getattr(user, "id", None))

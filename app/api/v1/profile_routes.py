@@ -2,7 +2,7 @@ import time
 import mimetypes
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
-from app.core.dependencies import get_current_user, get_current_onboarded_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user, require_regular_user
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
@@ -40,7 +40,7 @@ ALLOWED_AVATAR_EXTENSIONS = {
 @router.post("/choose-username")
 def post_choose_username(
     data: ChooseUsernameRequest,
-    user=Depends(get_current_user)
+    user=Depends(require_regular_user)
 ):
     """Allow an account without a username to choose one and set a full name."""
     return choose_username(user.id, data.username, data.full_name)
@@ -49,7 +49,7 @@ def post_choose_username(
 @router.post("/username")
 def post_username(
     data: ChooseUsernameRequest,
-    user=Depends(get_current_user)
+    user=Depends(require_regular_user)
 ):
     """Set username and full name for an account without a username."""
     return choose_username(user.id, data.username, data.full_name)
@@ -58,7 +58,7 @@ def post_username(
 @router.put("/username")
 def put_username(
     data: ChooseUsernameRequest,
-    user=Depends(get_current_user)
+    user=Depends(require_regular_user)
 ):
     """Set username and full name for an account without a username."""
     return choose_username(user.id, data.username, data.full_name)
@@ -134,7 +134,7 @@ def search_public_profiles(
     q: str = Query(..., min_length=1, max_length=SEARCH_TEXT_MAX_LENGTH, description="Search query for username"),
     page: int = Query(1, ge=1, le=10000),
     limit: int = Query(10, ge=1, le=50),
-    user=Depends(get_current_user),
+    user=Depends(require_regular_user),
 ):
     """Search public profiles by username. Requires authentication."""
     return search_profiles(q, page, limit, user.id)
@@ -145,7 +145,7 @@ def read_user_friends(
     user_id: UUID,
     page: int = Query(1, ge=1, le=10000),
     limit: int = Query(20, ge=1, le=50),
-    user=Depends(get_current_user),
+    user=Depends(require_regular_user),
 ):
     """Get another user's friends list in pages.
     Allowed for everyone on a public profile, and for friends (and self) only on a friends-only profile.
@@ -181,6 +181,6 @@ def read_user_friends(
 
 
 @router.get("/{user_id}")
-def read_public_profile(user_id: UUID, user=Depends(get_current_user)):
+def read_public_profile(user_id: UUID, user=Depends(require_regular_user)):
     """Get a profile by user ID, including events and friendship state."""
     return build_public_profile(str(user_id), user.id)
