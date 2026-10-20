@@ -347,7 +347,7 @@ def search_profiles(query: str, page: int, limit: int, viewer_id: str):
     q = (
         supabase.table("profiles")
         .select(SEARCH_COLUMNS)
-        .eq("visibility", "public")
+        .in_("visibility", ["public", "friends_only"])
         .ilike("username", f"%{escape_like(query)}%")
         .neq("id", viewer_id)
     )
