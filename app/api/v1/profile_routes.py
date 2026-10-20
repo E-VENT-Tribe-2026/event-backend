@@ -8,11 +8,15 @@ from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
     LocationUpdateRequest,
+    ProfileFriendsPage,
 )
 from app.schemas.auth_schema import ChooseUsernameRequest
-from app.services.public_profile_service import build_public_profile
+from app.services.public_profile_service import build_public_profile, PRIVATE_PROFILE_VISIBLE_STATUSES
+from app.services.block_visibility import has_blocked
+from app.services.friendship_service import get_friendship_state, get_user_friends_summary_page
 from app.services.profile_service import (
     get_profile,
+    get_public_profile,
     update_profile,
     update_location,
     search_profiles,
@@ -134,6 +138,46 @@ def search_public_profiles(
 ):
     """Search public profiles by username. Requires authentication."""
     return search_profiles(q, page, limit, user.id)
+
+
+@router.get("/{user_id}/friends", response_model=ProfileFriendsPage)
+def read_user_friends(
+    user_id: UUID,
+    page: int = Query(1, ge=1, le=10000),
+    limit: int = Query(20, ge=1, le=50),
+    user=Depends(get_current_user),
+):
+    """Get another user's friends list in pages.
+    Allowed for everyone on a public profile, and for friends (and self) only on a friends-only profile.
+    """
+    target_id = str(user_id)
+    viewer_id = user.id
+
+    is_self = target_id.lower() == str(viewer_id).lower()
+
+    if not is_self and has_blocked(target_id, viewer_id):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "profile_unavailable", "message": "This profile is unavailable."},
+        )
+
+    profile = get_public_profile(target_id)
+    friendship = get_friendship_state(viewer_id, target_id)
+    is_friend = is_self or (friendship.get("status") == "friends")
+
+    if profile.get("visibility") == "friends_only" and not is_friend:
+        raise HTTPException(
+            status_code=403,
+            detail="This user's friends list is only visible to friends."
+        )
+
+    if profile.get("visibility") == "private" and friendship.get("status") not in PRIVATE_PROFILE_VISIBLE_STATUSES:
+        raise HTTPException(
+            status_code=403,
+            detail="This user's friends list is only visible to friends."
+        )
+
+    return get_user_friends_summary_page(target_id, page=page, limit=limit, viewer_id=viewer_id)
 
 
 @router.get("/{user_id}")

@@ -148,3 +148,29 @@ class TestProfileUpdateRequestValidator:
     def test_rejects_username_with_trailing_newline(self):
         with pytest.raises(ValidationError):
             ProfileUpdateRequest(username="john\n")
+
+    def test_accepts_visibility_none(self):
+        req = ProfileUpdateRequest(visibility=None)
+        assert req.visibility is None
+
+    def test_accepts_visibility_public(self):
+        req = ProfileUpdateRequest(visibility="public")
+        assert req.visibility == "public"
+
+    def test_accepts_visibility_friends_only(self):
+        req = ProfileUpdateRequest(visibility="friends_only")
+        assert req.visibility == "friends_only"
+
+    def test_normalises_visibility_whitespace_and_casing(self):
+        req = ProfileUpdateRequest(visibility="  FRIENDS_ONLY  ")
+        assert req.visibility == "friends_only"
+
+    def test_rejects_visibility_private(self):
+        with pytest.raises(ValidationError) as exc:
+            ProfileUpdateRequest(visibility="private")
+        assert "Visibility must be either 'public' or 'friends_only'" in str(exc.value)
+
+    def test_rejects_visibility_invalid(self):
+        with pytest.raises(ValidationError) as exc:
+            ProfileUpdateRequest(visibility="random_val")
+        assert "Visibility must be either 'public' or 'friends_only'" in str(exc.value)

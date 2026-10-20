@@ -460,6 +460,40 @@ def get_friends(user_id: str, page: int = 1, limit: int = DEFAULT_PAGE_LIMIT) ->
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}
 
 
+def get_user_friends_summary_page(
+    user_id: str,
+    page: int = 1,
+    limit: int = DEFAULT_PAGE_LIMIT,
+    viewer_id: str | None = None,
+) -> dict:
+    """Return a paginated list of UserSummary objects representing user_id's friends."""
+    start = (page - 1) * limit
+    try:
+        uid = _uuid(user_id)
+    except ValueError:
+        return {"page": page, "limit": limit, "has_more": False, "data": []}
+
+    resp = (
+        supabase.table("friendships")
+        .select(FRIENDSHIP_COLUMNS)
+        .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
+        .order("created_at", desc=True)
+        .order("id", desc=True)
+        .range(start, start + limit)
+        .execute()
+    )
+    rows, has_more = _page(resp.data or [], limit)
+
+    others = [r["friend_id"] if _norm(r["user_id"]) == _norm(uid) else r["user_id"] for r in rows]
+    if viewer_id:
+        hidden = set(get_hidden_user_ids(viewer_id))
+        others = [o for o in others if o not in hidden]
+
+    summaries = get_user_summaries(others) if others else {}
+    data = [summaries.get(other) or build_user_summary(None, other) for other in others]
+    return {"page": page, "limit": limit, "has_more": has_more, "data": data}
+
+
 def get_friend_ids(user_id: str) -> list:
     """Return the ids of all of the user's friends."""
     uid = _uuid(user_id)
