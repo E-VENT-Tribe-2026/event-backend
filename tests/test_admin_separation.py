@@ -18,12 +18,12 @@ def _create_jwt(payload: dict) -> str:
 
 
 class MockRegularUser:
-    id = "reg-user-uuid"
+    id = "11111111-1111-1111-1111-111111111111"
     email = "user@example.com"
 
 
 class MockAdminUser:
-    id = "admin-uuid-1"
+    id = "22222222-2222-2222-2222-222222222222"
     email = "admin@example.com"
 
 

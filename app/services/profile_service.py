@@ -307,9 +307,9 @@ def update_location(user_id: str, latitude: float, longitude: float):
 
 PUBLIC_PROFILE_COLUMNS = (
     "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, "
-    "created_at, username, banner_url, interests, role"
+    "created_at, username, banner_url, interests"
 )
-SEARCH_COLUMNS = "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, username, role"
+SEARCH_COLUMNS = "id, full_name, avatar_url, avatar_kind, icon_id, bio, visibility, username"
 
 
 

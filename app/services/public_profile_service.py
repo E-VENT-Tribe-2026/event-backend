@@ -42,9 +42,21 @@ def build_public_profile(user_id: str, viewer_id: str) -> dict:
             detail={"code": "profile_unavailable", "message": "This profile is unavailable."},
         )
 
-    profile = get_public_profile(user_id)
-
     # Administrator accounts shall not appear to users; answer that profile is unavailable
+    try:
+        from app.db.supabase_client import supabase
+        role_resp = supabase.table("profiles").select("role").eq("id", user_id).limit(1).execute()
+        if role_resp.data and (role_resp.data[0].get("role") or "").lower() in ("administrator", "admin"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "profile_unavailable", "message": "This profile is unavailable."},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    profile = get_public_profile(user_id)
     if (profile.get("role") or "").lower() in ("administrator", "admin"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
