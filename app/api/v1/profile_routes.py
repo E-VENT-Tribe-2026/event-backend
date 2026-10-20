@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from app.core.dependencies import get_current_user, get_current_onboarded_user, require_regular_user
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
+from app.core.user_rate_limit import user_rate_limit, SEARCH_LIMIT
 from app.db.supabase_client import supabase
 from app.schemas.profile_schema import (
     ProfileUpdateRequest,
@@ -134,7 +135,7 @@ def search_public_profiles(
     q: str = Query(..., min_length=1, max_length=SEARCH_TEXT_MAX_LENGTH, description="Search query for username"),
     page: int = Query(1, ge=1, le=10000),
     limit: int = Query(10, ge=1, le=50),
-    user=Depends(require_regular_user),
+    user=Depends(user_rate_limit("profile_search", SEARCH_LIMIT)),
 ):
     """Search public profiles by username. Requires authentication."""
     return search_profiles(q, page, limit, user.id)
