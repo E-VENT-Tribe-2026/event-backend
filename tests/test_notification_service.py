@@ -216,6 +216,59 @@ class TestCreateNotificationRelatedUser:
         for c in chain.eq.call_args_list:
             assert c.args[0] != "related_user_id"
 
+    @patch("app.services.notification_service.supabase")
+    def test_actor_and_friend_request_saved_in_payload(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", None, "friend_request_received", "hi",
+                            related_user_id="u9", actor_id="u9", friend_request_id=42)
+
+        payload = chain.insert.call_args[0][0]
+        assert payload["actor_id"] == "u9"
+        assert payload["friend_request_id"] == 42
+
+    @patch("app.services.notification_service.supabase")
+    def test_event_notification_has_no_actor_or_request_keys(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", "e1", "event_updated", "hi")
+
+        payload = chain.insert.call_args[0][0]
+        assert "actor_id" not in payload
+        assert "friend_request_id" not in payload
+
+
+class TestDeleteNotificationsForRequest:
+    @patch("app.services.notification_service.supabase")
+    def test_deletes_by_friend_request_id(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.delete.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": 1}])
+
+        from app.services.notification_service import delete_notifications_for_request
+        result = delete_notifications_for_request(42)
+
+        mock_sb.table.assert_called_with("notifications")
+        assert chain.eq.call_args_list == [call("friend_request_id", 42)]
+        assert result == [{"id": 1}]
+
+    @patch("app.services.notification_service.supabase")
+    def test_returns_empty_list_when_data_none(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.delete.return_value = chain
+        chain.eq.return_value = chain
+        chain.execute.return_value = MagicMock(data=None)
+
+        from app.services.notification_service import delete_notifications_for_request
+        assert delete_notifications_for_request(42) == []
+
 
 class TestDeleteNotificationsFor:
     @patch("app.services.notification_service.supabase")

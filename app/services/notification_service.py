@@ -9,6 +9,8 @@ def create_notification(
     type_: str,
     message: str,
     related_user_id: str | None = None,
+    actor_id: str | None = None,
+    friend_request_id: int | None = None,
 ):
     payload = {
         "user_id": user_id,
@@ -20,6 +22,10 @@ def create_notification(
     }
     if related_user_id is not None:
         payload["related_user_id"] = related_user_id
+    if actor_id is not None:
+        payload["actor_id"] = actor_id
+    if friend_request_id is not None:
+        payload["friend_request_id"] = friend_request_id
 
     dedupe = supabase.table("notifications") \
         .select("created_at") \
@@ -93,6 +99,15 @@ def delete_notifications_for(user_id: str, type_: str, related_user_id: str):
         .eq("user_id", user_id) \
         .eq("type", type_) \
         .eq("related_user_id", related_user_id) \
+        .execute()
+    return response.data or []
+
+
+def delete_notifications_for_request(friend_request_id: int):
+    """Delete the notifications linked to one friend request."""
+    response = supabase.table("notifications") \
+        .delete() \
+        .eq("friend_request_id", friend_request_id) \
         .execute()
     return response.data or []
 

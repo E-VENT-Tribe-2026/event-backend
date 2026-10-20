@@ -8,7 +8,11 @@ from app.services.profile_service import (
     get_user_summaries,
     get_username,
 )
-from app.services.notification_service import create_notification, delete_notifications_for
+from app.services.notification_service import (
+    create_notification,
+    delete_notifications_for,
+    delete_notifications_for_request,
+)
 from app.services.block_visibility import get_hidden_user_ids, has_blocked
 from app.utils.embedding_helper import cosine_similarity, generate_embedding, parse_embedding
 
@@ -173,6 +177,8 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
             receiver_id, None, FRIEND_REQUEST_RECEIVED,
             f"{get_username(sender_id)} sent you a friend request",
             related_user_id=sender_id,
+            actor_id=sender_id,
+            friend_request_id=row["id"],
         )
     except Exception:
         logger.error("Failed to create friend request notification on send: request_id=%s initiator=%s receiver=%s",
@@ -203,7 +209,10 @@ def _claim_request(request_id: int, role_column: str, user_id: str) -> dict:
 def _cleanup_request_notification(row: dict, context: str):
     """Remove the receiver's friend-request notification, never failing the caller."""
     try:
-        delete_notifications_for(row["receiver_id"], FRIEND_REQUEST_RECEIVED, row["initiator_id"])
+        deleted = delete_notifications_for_request(row["id"])
+        if not deleted:
+            # Notifications created before friend_request_id was populated.
+            delete_notifications_for(row["receiver_id"], FRIEND_REQUEST_RECEIVED, row["initiator_id"])
     except Exception:
         logger.error("Failed to clean up friend request notification on %s: request_id=%s initiator=%s receiver=%s",
                      context, row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
