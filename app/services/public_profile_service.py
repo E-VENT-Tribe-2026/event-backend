@@ -44,6 +44,13 @@ def build_public_profile(user_id: str, viewer_id: str) -> dict:
 
     profile = get_public_profile(user_id)
 
+    # Administrator accounts shall not appear to users; answer that profile is unavailable
+    if (profile.get("role") or "").lower() in ("administrator", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "profile_unavailable", "message": "This profile is unavailable."},
+        )
+
     if not is_self and has_blocked(viewer_id, user_id):
         top = {field: profile.get(field) for field in BLOCKED_PROFILE_FIELDS if field in profile}
         top["blocked_by_me"] = True

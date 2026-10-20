@@ -34,12 +34,38 @@ def get_optional_user(credentials: HTTPAuthorizationCredentials | None = Depends
     except Exception:
         return None
 
-def get_current_onboarded_user(user=Depends(get_current_user)):
-    """Extends get_current_user by requiring a completed profile (username + full_name)."""
+def require_regular_user(user=Depends(get_current_user)):
+    """
+    Ensures that the authenticated user is NOT an administrator.
+    Administrator accounts are strictly separated from user functions.
+    """
     try:
         result = (
             supabase.table("profiles")
-            .select("username, full_name")
+            .select("role")
+            .eq("id", user.id)
+            .single()
+            .execute()
+        )
+        role = (result.data or {}).get("role")
+    except Exception:
+        role = None
+
+    if role in ("administrator", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator accounts cannot perform user actions.",
+        )
+
+    return user
+
+
+def get_current_onboarded_user(user=Depends(require_regular_user)):
+    """Extends require_regular_user by requiring a completed profile (username + full_name)."""
+    try:
+        result = (
+            supabase.table("profiles")
+            .select("username, full_name, role")
             .eq("id", user.id)
             .single()
             .execute()
@@ -47,6 +73,13 @@ def get_current_onboarded_user(user=Depends(get_current_user)):
         data = result.data or {}
     except Exception:
         data = {}
+
+    role = data.get("role")
+    if role in ("administrator", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator accounts cannot perform user actions.",
+        )
 
     username = (data.get("username") or "").strip()
     full_name = (data.get("full_name") or "").strip()

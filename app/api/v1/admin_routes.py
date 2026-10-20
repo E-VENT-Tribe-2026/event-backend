@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, Path
 from app.core.dependencies import require_admin
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.admin_schema import (
+    AdminAccountResponse,
     AdminCountsResponse,
     AdminUserListResponse,
     AdminUserDetailResponse,
@@ -12,6 +13,7 @@ from app.schemas.admin_schema import (
     GrantAdminRoleResponse,
 )
 from app.services.admin_service import (
+    get_admin_account_details,
     get_admin_counts,
     list_admin_users,
     list_admin_events,
@@ -37,6 +39,15 @@ def verify_admin_access(admin=Depends(require_admin)):
         "message": "Administrative access verified.",
         "admin_id": admin.id,
     }
+
+
+@router.get("/account", response_model=AdminAccountResponse)
+def get_account(admin=Depends(require_admin)):
+    """
+    Returns the signed-in administrator's account details for the account screen:
+    profile picture, full name, username and the date they became an administrator.
+    """
+    return get_admin_account_details(admin_id=admin.id)
 
 
 @router.get("/counts", response_model=AdminCountsResponse)

@@ -133,8 +133,10 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     if _norm(sender_id) == _norm(receiver_id):
         raise friend_error(400, "cannot_friend_self", "You cannot send a friend request to yourself.")
 
-    profile = supabase.table("profiles").select("id").eq("id", receiver_id).limit(1).execute()
+    profile = supabase.table("profiles").select("id, role").eq("id", receiver_id).limit(1).execute()
     if not profile.data:
+        raise friend_error(404, "user_not_found", "User not found.")
+    if (profile.data[0].get("role") or "").lower() in ("administrator", "admin"):
         raise friend_error(404, "user_not_found", "User not found.")
 
     # A user who was blocked gets the same answer as for a user that does not exist.
@@ -590,12 +592,12 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
     excluded = friend_ids | pending_ids | get_hidden_user_ids(uid) | {_norm(uid)}
     query_embedding = _viewer_interest_embedding(uid)
 
-    candidates = supabase.table("profiles").select(SUGGESTION_COLUMNS)
+    candidates = supabase.table("profiles").select(SUGGESTION_COLUMNS).neq("role", "administrator").neq("role", "admin")
     if excluded:
         candidates = candidates.not_.in_("id", list(excluded))
     rows = [
         row for row in (candidates.execute().data or [])
-        if _norm(row.get("id")) not in excluded
+        if _norm(row.get("id")) not in excluded and (row.get("role") or "").lower() not in ("administrator", "admin")
     ]
 
     ranked = sorted(rows, key=lambda row: _knn_sort_key(query_embedding, row))
