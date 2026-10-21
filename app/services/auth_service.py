@@ -136,17 +136,25 @@ def login_user(email: str, password: str):
 
         user_id = response.user.id
         role = None
+        profile_data = {}
         try:
             profile_res = (
                 supabase.table("profiles")
-                .select("role")
+                .select("role, suspended_at, suspension_reason")
                 .eq("id", user_id)
                 .single()
                 .execute()
             )
-            role = (profile_res.data or {}).get("role")
+            profile_data = profile_res.data if isinstance(profile_res.data, dict) else {}
+            role = profile_data.get("role")
         except Exception as e:
             logger.warning(f"Could not fetch profile role for user {user_id}: {e}")
+
+        # Suspended account (#192): the credentials were correct, so we may say why.
+        # Wrong credentials never reach this point and get the generic 401 below.
+        if profile_data.get("suspended_at"):
+            from app.core.dependencies import suspension_error
+            raise suspension_error(profile_data.get("suspension_reason"))
 
         is_admin = (role == "administrator")
         if not is_admin:

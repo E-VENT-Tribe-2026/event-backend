@@ -10,7 +10,44 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
 
+def suspension_error(reason: str | None) -> HTTPException:
+    """403 for a suspended account (#192). Only sent once the credentials or session are valid."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "account_suspended",
+            "message": "Your account is suspended.",
+            "reason": reason,
+        },
+    )
+
+
+def refuse_if_suspended(user_id: str) -> None:
+    """Raise suspension_error when the account is suspended (#192)."""
+    try:
+        res = (
+            supabase.table("profiles")
+            .select("suspended_at, suspension_reason")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        data = res.data
+    except Exception as e:
+        logger.error(f"Could not check suspension of user {user_id}: {e}")
+        return
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if isinstance(data, dict) and data.get("suspended_at"):
+        raise suspension_error(data.get("suspension_reason"))
+
+
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    The signed-in user. Every authenticated endpoint depends on this (directly or through
+    require_regular_user, get_current_onboarded_user or require_admin), so a suspended
+    account is refused here on every request, whichever way it signed in (#192).
+    """
     token = credentials.credentials
 
     try:
@@ -19,20 +56,26 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         if user.user is None:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-        return user.user
-
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
+
+    refuse_if_suspended(user.user.id)
+    return user.user
+
+
 def get_optional_user(credentials: HTTPAuthorizationCredentials | None = Depends(optional_security)):
-    """For public endpoints: the signed-in user when a valid token is sent, otherwise None."""
+    """For public endpoints: the signed-in user when a valid token is sent, otherwise None.
+    A suspended account's token is refused, not treated as anonymous (#192)."""
     if credentials is None:
         return None
     try:
         result = supabase.auth.get_user(credentials.credentials)
-        return result.user
+        user = result.user
     except Exception:
         return None
+    if user is not None:
+        refuse_if_suspended(user.id)
+    return user
 
 def require_regular_user(user=Depends(get_current_user)):
     """

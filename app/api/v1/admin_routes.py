@@ -31,7 +31,8 @@ from app.schemas.warning_schema import (
 )
 from app.services.warning_service import give_warning, withdraw_warning, get_warning_history
 from app.services.audit_service import list_audit_log
-
+from app.schemas.suspension_schema import SuspensionReasonRequest, SuspensionResponse
+from app.services.suspension_service import suspend_user, lift_suspension
 
 logger = logging.getLogger(__name__)
 
@@ -187,3 +188,26 @@ def get_audit_log(
 ):
     """Every administrative action, newest first, page by page."""
     return list_audit_log(before=before, limit=limit)
+
+@router.post("/users/{user_id}/suspend", response_model=SuspensionResponse)
+def post_suspend(
+    body: SuspensionReasonRequest,
+    user_id: str = Path(..., description="User account to suspend"),
+    admin=Depends(require_admin),
+):
+    """
+    Suspends a user account with a written reason, until an administrator lifts it.
+    The account can no longer sign in or use the application, its upcoming events are
+    cancelled and it leaves the upcoming events it joined. Refused for an administrator.
+    """
+    return suspend_user(user_id=user_id, admin_id=admin.id, reason=body.reason)
+
+
+@router.post("/users/{user_id}/lift-suspension", response_model=SuspensionResponse)
+def post_lift_suspension(
+    body: SuspensionReasonRequest,
+    user_id: str = Path(..., description="Suspended user account"),
+    admin=Depends(require_admin),
+):
+    """Lifts a suspension with a written reason and emails the user. Cancelled events stay cancelled."""
+    return lift_suspension(user_id=user_id, admin_id=admin.id, reason=body.reason)
