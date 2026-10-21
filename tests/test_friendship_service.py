@@ -23,7 +23,8 @@ def _summaries(ids):
 @contextmanager
 def svc(mock_sb, state=False):
     """Patches supabase and the cross-module collaborators of friendship_service."""
-    names = ["get_user_summaries", "get_username", "create_notification", "delete_notifications_for"]
+    names = ["get_user_summaries", "get_username", "create_notification",
+             "delete_notifications_for", "delete_notifications_for_request"]
     if state:
         names.append("get_friendship_state")
     with ExitStack() as stack:
@@ -169,7 +170,7 @@ class TestSendFriendRequest:
             "initiator_id": ME, "receiver_id": OTHER, "status": "pending"}
         m["create_notification"].assert_called_once_with(
             OTHER, None, "friend_request_received", "john_42 sent you a friend request",
-            related_user_id=ME)
+            related_user_id=ME, actor_id=ME, friend_request_id=7)
         assert result == {
             "request_id": 7,
             "created_at": "2026-01-01T10:00:00+00:00",
@@ -288,6 +289,16 @@ class TestCancelFriendRequest:
         chains["friend_requests"].eq.assert_any_call("id", 7)
         chains["friend_requests"].eq.assert_any_call("initiator_id", ME)
         chains["friend_requests"].eq.assert_any_call("status", "pending")
+        m["delete_notifications_for_request"].assert_called_once_with(7)
+
+    def test_cleanup_falls_back_to_related_user_for_legacy_notifications(self):
+        mock_sb, chains = make_table_router()
+        chains["friend_requests"].execute.side_effect = [
+            MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
+        with svc(mock_sb) as m:
+            m["delete_notifications_for_request"].return_value = []
+            from app.services.friendship_service import cancel_friend_request
+            cancel_friend_request(7, ME)
         m["delete_notifications_for"].assert_called_once_with(OTHER, "friend_request_received", ME)
 
     def test_cleanup_failure_does_not_fail(self):
@@ -295,7 +306,7 @@ class TestCancelFriendRequest:
         chains["friend_requests"].execute.side_effect = [
             MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
         with svc(mock_sb) as m:
-            m["delete_notifications_for"].side_effect = RuntimeError("boom")
+            m["delete_notifications_for_request"].side_effect = RuntimeError("boom")
             from app.services.friendship_service import cancel_friend_request
             assert cancel_friend_request(7, ME) == {"message": "Friend request cancelled"}
 
@@ -309,7 +320,7 @@ class TestCancelFriendRequest:
                 cancel_friend_request(7, ME)
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "request_not_found"
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
 
     def test_recipient_gets_403(self):
         mock_sb, chains = make_table_router()
@@ -321,7 +332,7 @@ class TestCancelFriendRequest:
         assert exc.value.status_code == 403
         assert exc.value.detail["code"] == "not_request_sender"
         chains["friend_requests"].delete.assert_not_called()
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
 
     def test_stranger_gets_404(self):
         mock_sb, chains = make_table_router()
@@ -370,7 +381,7 @@ class TestAcceptFriendRequest:
         # Deletion and friendship creation happen inside the RPC, not as separate calls.
         chains["friend_requests"].delete.assert_not_called()
         chains["friendships"].insert.assert_not_called()
-        m["delete_notifications_for"].assert_called_once_with(OTHER, "friend_request_received", ME)
+        m["delete_notifications_for_request"].assert_called_once_with(7)
         m["create_notification"].assert_called_once_with(
             ME, None, "friend_request_accepted", "jane_doe accepted your friend request",
             related_user_id=OTHER)
@@ -419,7 +430,7 @@ class TestAcceptFriendRequest:
             from app.services.friendship_service import accept_friend_request
             result = accept_friend_request(7, OTHER)
 
-        m["delete_notifications_for"].assert_called_once_with(OTHER, "friend_request_received", ME)
+        m["delete_notifications_for_request"].assert_called_once_with(7)
         m["create_notification"].assert_not_called()
         assert result["friend_since"] == "2026-02-02T10:00:00+00:00"
         assert result["user"]["id"] == ME
@@ -434,7 +445,7 @@ class TestAcceptFriendRequest:
                 accept_friend_request(7, OTHER)
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "request_not_found"
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
         m["create_notification"].assert_not_called()
 
     def test_rpc_failure_reraises_without_side_effects(self):
@@ -449,14 +460,14 @@ class TestAcceptFriendRequest:
         assert exc.value is boom
         chains["friend_requests"].insert.assert_not_called()
         m["create_notification"].assert_not_called()
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
 
     def test_notification_failures_do_not_fail_accept(self):
         mock_sb, chains = make_table_router()
         chains["friend_requests"].execute.side_effect = [MagicMock(data=[_req(7, ME, OTHER)])]
         self._rpc(mock_sb)
         with svc(mock_sb) as m:
-            m["delete_notifications_for"].side_effect = RuntimeError("boom")
+            m["delete_notifications_for_request"].side_effect = RuntimeError("boom")
             m["create_notification"].side_effect = RuntimeError("boom")
             from app.services.friendship_service import accept_friend_request
             result = accept_friend_request(7, OTHER)
@@ -523,7 +534,7 @@ class TestDeclineFriendRequest:
         chains["friend_requests"].eq.assert_any_call("id", 7)
         chains["friend_requests"].eq.assert_any_call("receiver_id", OTHER)
         chains["friend_requests"].eq.assert_any_call("status", "pending")
-        m["delete_notifications_for"].assert_called_once_with(OTHER, "friend_request_received", ME)
+        m["delete_notifications_for_request"].assert_called_once_with(7)
         m["create_notification"].assert_not_called()
 
     def test_lost_claim_raises_404_without_cleanup(self):
@@ -536,7 +547,7 @@ class TestDeclineFriendRequest:
                 decline_friend_request(7, OTHER)
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "request_not_found"
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
         m["create_notification"].assert_not_called()
 
     def test_sender_gets_403(self):
@@ -566,7 +577,7 @@ class TestDeclineFriendRequest:
         chains["friend_requests"].execute.side_effect = [
             MagicMock(data=[_req(7, ME, OTHER)]), MagicMock(data=[_req(7)])]
         with svc(mock_sb) as m:
-            m["delete_notifications_for"].side_effect = RuntimeError("boom")
+            m["delete_notifications_for_request"].side_effect = RuntimeError("boom")
             from app.services.friendship_service import decline_friend_request
             assert decline_friend_request(7, OTHER) == {"message": "Friend request declined"}
 
@@ -738,7 +749,7 @@ class TestRemoveFriend:
         assert f"and(user_id.eq.{ME},friend_id.eq.{OTHER})" in pair
         assert f"and(user_id.eq.{OTHER},friend_id.eq.{ME})" in pair
         m["create_notification"].assert_not_called()
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
 
     def test_not_friends_raises_404(self):
         mock_sb, chains = make_table_router()
@@ -750,7 +761,7 @@ class TestRemoveFriend:
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "friendship_not_found"
         m["create_notification"].assert_not_called()
-        m["delete_notifications_for"].assert_not_called()
+        m["delete_notifications_for_request"].assert_not_called()
 
     @pytest.mark.parametrize("bad", ["x),user_id.not.is.null,and(user_id.eq.x", "requests", ""])
     def test_non_uuid_friend_id_raises_404_without_query(self, bad):
