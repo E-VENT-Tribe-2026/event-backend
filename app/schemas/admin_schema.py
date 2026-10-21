@@ -1,6 +1,6 @@
-from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
+from app.schemas.warning_schema import PersonSummary
 
 
 class AdminEventCounts(BaseModel):
@@ -26,9 +26,15 @@ class AdminUserListItem(BaseModel):
     role: Optional[str] = None
     is_admin: bool = False
     created_at: Optional[str] = None
-
+    # #191: null for an administrator's entry, which shows the role only.
+    warning_count: Optional[int] = None
+    status: Optional[Literal["active", "suspended"]] = None
     model_config = ConfigDict(extra="ignore")
 
+class AdminUserListCounters(BaseModel):
+    administrators: int
+    suspended: int
+    with_warnings: int
 
 class AdminUserListResponse(BaseModel):
     items: List[AdminUserListItem]
@@ -119,6 +125,13 @@ class AdminUserDetailResponse(BaseModel):
     warning_history: List[str] = []
     organized_events: AdminUserEventCategories
     joined_events: AdminUserEventCategories
+        # #191: null for an administrator account.
+    profile_visibility: Optional[str] = None
+    status: Optional[Literal["active", "suspended"]] = None
+    warning_count: Optional[int] = None
+    friends: List[PersonSummary] = []
+    blocked_users: List[PersonSummary] = []
+    blocked_by: List[PersonSummary] = []
 
     model_config = ConfigDict(extra="ignore")
 

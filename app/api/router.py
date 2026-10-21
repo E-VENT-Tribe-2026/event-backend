@@ -14,6 +14,7 @@ from app.api.v1 import (
     admin_routes,
     invitation_routes,
     block_routes,
+    warning_routes,
 )
 
 api_router = APIRouter()
@@ -34,6 +35,11 @@ api_router.include_router(
     admin_routes.router,
     prefix="/admin",
     tags=["Admin"]
+)
+api_router.include_router(
+    warning_routes.router,
+    prefix="/warnings",
+    tags=["Warnings"]
 )
 
 api_router.include_router(
