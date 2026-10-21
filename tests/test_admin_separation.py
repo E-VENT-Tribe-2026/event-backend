@@ -98,6 +98,7 @@ class TestAdminSeparation:
     @patch("app.services.friendship_service.supabase")
     def test_send_friend_request_to_administrator_refused(self, mock_sb):
         app.dependency_overrides[require_regular_user] = lambda: MockRegularUser()
+        app.dependency_overrides[get_current_onboarded_user] = lambda: MockRegularUser()
         try:
             chain = MagicMock()
             chain.select.return_value = chain
@@ -113,6 +114,7 @@ class TestAdminSeparation:
             assert "user_not_found" in str(res.json())
         finally:
             app.dependency_overrides.pop(require_regular_user, None)
+            app.dependency_overrides.pop(get_current_onboarded_user, None)
 
     # 4. Past events organized by former users still show them as organizer (full name & picture, without username)
     @patch("app.services.profile_service.supabase")

@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 from app.main import app
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user
 
 client = TestClient(app)
 HEADERS = {"Authorization": "Bearer token"}
@@ -23,10 +23,12 @@ class MockUser:
 @pytest.fixture(autouse=True)
 def _auth_override():
     app.dependency_overrides[get_current_user] = lambda: MockUser()
+    app.dependency_overrides[get_current_onboarded_user] = lambda: MockUser()
     try:
         yield
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_current_onboarded_user, None)
 
 
 class TestFriendRequestRoutes:
@@ -213,11 +215,70 @@ class TestAuthRequired:
         ("delete", "/requests/7", "cancel_friend_request", {}),
         ("get", "", "get_friends", {}),
         ("delete", f"/{OTHER}", "remove_friend", {}),
+        ("get", "/suggestions", "get_friend_suggestions", {}),
     ])
     def test_unauthenticated_is_rejected(self, method, path, target, kwargs):
         app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_current_onboarded_user, None)
         assert get_current_user not in app.dependency_overrides
         with patch(f"app.api.v1.friendship_routes.{target}") as mock_svc:
             response = getattr(client, method)(f"/api/friends{path}", **kwargs)
         assert response.status_code in (401, 403)
         mock_svc.assert_not_called()
+
+
+class TestOnboardingRequired:
+    @pytest.mark.parametrize("method,path,target,kwargs", [
+        ("post", "/requests", "send_friend_request", {"json": {"receiver_id": OTHER}}),
+        ("get", "/requests/incoming", "get_incoming_requests", {}),
+        ("get", "/requests/sent", "get_sent_requests", {}),
+        ("get", "/requests/count", "count_incoming_requests", {}),
+        ("post", "/requests/7/accept", "accept_friend_request", {}),
+        ("post", "/requests/7/decline", "decline_friend_request", {}),
+        ("delete", "/requests/7", "cancel_friend_request", {}),
+        ("get", "", "get_friends", {}),
+        ("delete", f"/{OTHER}", "remove_friend", {}),
+        ("get", "/suggestions", "get_friend_suggestions", {}),
+    ])
+    @pytest.mark.parametrize("profile_data", [
+        {"username": None, "full_name": "Alice Smith"},
+        {"username": "   ", "full_name": "Alice Smith"},
+        {"username": "alice", "full_name": None},
+        {"username": "alice", "full_name": "   "},
+        {"username": None, "full_name": None},
+    ])
+    def test_incomplete_profile_rejected_with_403(self, method, path, target, kwargs, profile_data):
+        from unittest.mock import MagicMock
+        app.dependency_overrides.pop(get_current_onboarded_user, None)
+        chain = MagicMock()
+        chain.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=profile_data)
+
+        with patch("app.core.dependencies.supabase", chain), \
+             patch(f"app.api.v1.friendship_routes.{target}") as mock_svc:
+            response = getattr(client, method)(f"/api/friends{path}", headers=HEADERS, **kwargs)
+
+        assert response.status_code == 403
+        assert "Profile setup required" in response.json()["detail"]
+        mock_svc.assert_not_called()
+
+    def test_fully_onboarded_user_passes_gate(self):
+        from unittest.mock import MagicMock
+        app.dependency_overrides.pop(get_current_onboarded_user, None)
+        chain = MagicMock()
+        chain.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data={"username": "alice42", "full_name": "Alice Smith", "role": "user"})
+
+        payload = {"request_id": 7, "created_at": "2026-01-01T10:00:00+00:00", "user": JANE}
+        with patch("app.core.dependencies.supabase", chain), \
+             patch("app.api.v1.friendship_routes.send_friend_request", return_value=payload) as mock_send:
+            response = client.post("/api/friends/requests", json={"receiver_id": OTHER}, headers=HEADERS)
+
+        assert response.status_code == 201
+        mock_send.assert_called_once_with("u1", OTHER)

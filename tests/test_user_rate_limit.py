@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 from app.main import app
-from app.core.dependencies import get_current_user, require_regular_user
+from app.core.dependencies import get_current_user, require_regular_user, get_current_onboarded_user
 from app.core import user_rate_limit as url
 from app.core.user_rate_limit import SEARCH_LIMIT, FRIEND_REQUEST_LIMIT
 
@@ -23,9 +23,11 @@ def as_user():
         user = MockUser(user_id)
         app.dependency_overrides[get_current_user] = lambda: user
         app.dependency_overrides[require_regular_user] = lambda: user
+        app.dependency_overrides[get_current_onboarded_user] = lambda: user
     yield _as
     app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides.pop(require_regular_user, None)
+    app.dependency_overrides.pop(get_current_onboarded_user, None)
 
 
 EMPTY_PAGE = {"page": 1, "limit": 10, "has_more": False, "data": []}
