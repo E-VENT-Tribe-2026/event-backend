@@ -30,10 +30,10 @@ def reset_user_rate_limits() -> None:
         _hits.clear()
 
 
-def user_rate_limit(scope: str, limit: int, window: int = WINDOW_SECONDS):
+def user_rate_limit(scope: str, limit: int, window: int = WINDOW_SECONDS, user_dep=require_regular_user):
     """Dependency factory: sliding-window limit of `limit` requests per `window` seconds per user."""
 
-    def dependency(user=Depends(require_regular_user)):
+    def dependency(user=Depends(user_dep)):
         now = time.monotonic()
         with _lock:
             hits = _hits[(scope, str(user.id))]
