@@ -101,8 +101,9 @@ class TestAdminPanel:
             app.dependency_overrides.pop(require_admin, None)
 
     # 3. List users with pagination and search
+    @patch("app.services.warning_service.supabase")
     @patch("app.services.admin_service.supabase")
-    def test_list_admin_users(self, mock_sb):
+    def test_list_admin_users(self, mock_sb, _mock_warnings_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
             users_data = [
@@ -177,8 +178,9 @@ class TestAdminPanel:
             app.dependency_overrides.pop(require_admin, None)
 
     # 5. User details with organized and joined events
+    @patch("app.services.warning_service.supabase")
     @patch("app.services.admin_service.supabase")
-    def test_get_admin_user_details(self, mock_sb):
+    def test_get_admin_user_details(self, mock_sb, _mock_warnings_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
             now = datetime.now(timezone.utc)

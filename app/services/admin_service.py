@@ -92,23 +92,49 @@ def get_admin_counts() -> dict:
     }
 
 
-def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) -> dict:
+def _is_admin_role(role) -> bool:
+    return role in ("administrator", "admin")
+
+
+def _account_status(profile: dict) -> str:
+    return "suspended" if profile.get("suspended_at") else "active"
+
+
+def _empty_page(page: int, limit: int) -> dict:
+    return {"items": [], "total": 0, "page": page, "limit": limit, "total_pages": 1}
+
+
+def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20,
+                     filter_by: str | None = None) -> dict:
     """
     Lists every registered account (public and private) in pages.
-    Supports case-insensitive substring search by username.
+    Supports case-insensitive substring search by username, combined with
+    one counter filter: administrators, suspended or with_warnings.
     """
+    from app.services.warning_service import counted_warning_counts, user_ids_with_counted_warnings
+
     page = max(1, page)
     limit = max(1, min(100, limit))
     offset = (page - 1) * limit
 
     query = supabase.table("profiles").select(
-        "id, username, full_name, avatar_url, avatar_kind, icon_id, role, created_at",
+        "id, username, full_name, avatar_url, avatar_kind, icon_id, role, created_at, suspended_at",
         count="exact"
     )
 
     pattern = like_contains(search) if search else None
     if pattern:
         query = query.ilike("username", pattern)
+
+    if filter_by == "administrators":
+        query = query.eq("role", "administrator")
+    elif filter_by == "suspended":
+        query = query.neq("role", "administrator").not_.is_("suspended_at", "null")
+    elif filter_by == "with_warnings":
+        warned_ids = user_ids_with_counted_warnings()
+        if not warned_ids:
+            return _empty_page(page, limit)
+        query = query.in_("id", warned_ids)
 
     res = (
         query
@@ -120,11 +146,15 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
     total = res.count if res.count is not None else len(res.data or [])
     total_pages = max(1, math.ceil(total / limit))
 
+    rows = res.data or []
+    counts = counted_warning_counts([r.get("id") for r in rows if not _is_admin_role(r.get("role"))])
+
     items = []
-    for row in (res.data or []):
+    for row in rows:
         username = str(row.get("username") or "").strip() or None
         full_name = row.get("full_name")
         role = row.get("role") or "user"
+        is_admin = _is_admin_role(role)
         items.append({
             "id": row.get("id"),
             "username": username,
@@ -136,6 +166,9 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
             "role": role,
             "is_admin": (role == "administrator"),
             "created_at": row.get("created_at"),
+            # #191: an administrator's entry shows the role only.
+            "warning_count": None if is_admin else counts.get(row.get("id"), 0),
+            "status": None if is_admin else _account_status(row),
         })
 
     return {
@@ -146,6 +179,55 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
         "total_pages": total_pages,
     }
 
+def get_user_list_counters() -> dict:
+    """The three counters at the top of the user list."""
+    from app.services.warning_service import user_ids_with_counted_warnings
+
+    admins = (
+        supabase.table("profiles").select("id", count="exact")
+        .eq("role", "administrator").execute()
+    )
+    suspended = (
+        supabase.table("profiles").select("id", count="exact")
+        .neq("role", "administrator").not_.is_("suspended_at", "null").execute()
+    )
+    return {
+        "administrators": admins.count if admins.count is not None else len(admins.data or []),
+        "suspended": suspended.count if suspended.count is not None else len(suspended.data or []),
+        "with_warnings": len(user_ids_with_counted_warnings()),
+    }
+
+
+def _summaries_for(ids) -> list:
+    ids = list(dict.fromkeys(i for i in ids if i))
+    if not ids:
+        return []
+    res = (
+        supabase.table("profiles")
+        .select("id, username, full_name, avatar_url, avatar_kind, icon_id")
+        .in_("id", ids)
+        .execute()
+    )
+    return [_build_user_summary(row) for row in (res.data or [])]
+
+
+def _relations_of(user_id: str) -> dict:
+    """Friends, users they blocked, users who blocked them. Ignores profile visibility on purpose."""
+    friends = (
+        supabase.table("friendships").select("user_id, friend_id")
+        .or_(f"user_id.eq.{user_id},friend_id.eq.{user_id}").execute()
+    )
+    friend_ids = [
+        r["friend_id"] if str(r["user_id"]) == str(user_id) else r["user_id"]
+        for r in (friends.data or [])
+    ]
+    blocked = supabase.table("user_blocks").select("blocked_id").eq("blocker_id", user_id).execute()
+    blocked_by = supabase.table("user_blocks").select("blocker_id").eq("blocked_id", user_id).execute()
+    return {
+        "friends": _summaries_for(friend_ids),
+        "blocked_users": _summaries_for(r["blocked_id"] for r in (blocked.data or [])),
+        "blocked_by": _summaries_for(r["blocker_id"] for r in (blocked_by.data or [])),
+    }
 
 def list_admin_events(status_filter: str = "all", search: str | None = None, page: int = 1, limit: int = 20) -> dict:
     """
@@ -232,6 +314,7 @@ def get_admin_user_details(user_id: str) -> dict:
     - Events they organize (upcoming, past, cancelled).
     - Events they joined (upcoming, past, cancelled).
     """
+    from app.services.warning_service import counted_warning_counts
     # 1. Fetch user profile
     prof_res = (
         supabase.table("profiles")
@@ -332,6 +415,10 @@ def get_admin_user_details(user_id: str) -> dict:
         "warning_history": [],
         "organized_events": organized_events,
         "joined_events": joined_events,
+        "profile_visibility": None if is_admin else (profile.get("visibility") or "public"),
+        "status": None if is_admin else _account_status(profile),
+        "warning_count": None if is_admin else counted_warning_counts([user_id]).get(user_id, 0),
+        **({"friends": [], "blocked_users": [], "blocked_by": []} if is_admin else _relations_of(user_id)),
     }
 
 
