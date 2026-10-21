@@ -362,6 +362,7 @@ def search_profiles(query: str, page: int, limit: int, viewer_id: str):
         .neq("id", viewer_id)
         .neq("role", "administrator")
         .neq("role", "admin")
+        .is_("suspended_at", "null")          # suspended accounts never appear in search (#192)
     )
     # Users who blocked the viewer do not appear; users the viewer blocked still do.
     blocked_by = get_blocked_by_ids(viewer_id)

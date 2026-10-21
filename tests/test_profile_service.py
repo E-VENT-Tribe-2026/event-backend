@@ -286,7 +286,7 @@ class TestBuildPublicProfile:
 
 def _search_chain(data):
     chain = MagicMock()
-    for name in ("select", "in_", "eq", "neq", "ilike", "order", "range"):
+    for name in ("select", "in_", "eq", "neq", "is_", "ilike", "order", "range"):
         getattr(chain, name).return_value = chain
     chain.execute.return_value = MagicMock(data=data)
     return chain

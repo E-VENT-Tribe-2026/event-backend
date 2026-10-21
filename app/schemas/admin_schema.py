@@ -128,6 +128,8 @@ class AdminUserDetailResponse(BaseModel):
         # #191: null for an administrator account.
     profile_visibility: Optional[str] = None
     status: Optional[Literal["active", "suspended"]] = None
+    suspended_since: Optional[str] = None
+    suspension_reason: Optional[str] = None
     warning_count: Optional[int] = None
     friends: List[PersonSummary] = []
     blocked_users: List[PersonSummary] = []

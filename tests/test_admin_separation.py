@@ -43,6 +43,7 @@ class TestAdminSeparation:
             chain.in_.return_value = chain
             chain.ilike.return_value = chain
             chain.neq.return_value = chain
+            chain.is_.return_value = chain
             chain.order.return_value = chain
             chain.range.return_value = chain
             chain.execute.return_value = MagicMock(data=[

@@ -592,12 +592,18 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
     excluded = friend_ids | pending_ids | get_hidden_user_ids(uid) | {_norm(uid)}
     query_embedding = _viewer_interest_embedding(uid)
 
-    candidates = supabase.table("profiles").select(SUGGESTION_COLUMNS).neq("role", "administrator").neq("role", "admin")
+    candidates = (
+        supabase.table("profiles").select(SUGGESTION_COLUMNS)
+        .neq("role", "administrator").neq("role", "admin")
+        .is_("suspended_at", "null")          # suspended accounts are never suggested (#192)
+    )
     if excluded:
         candidates = candidates.not_.in_("id", list(excluded))
     rows = [
         row for row in (candidates.execute().data or [])
-        if _norm(row.get("id")) not in excluded and (row.get("role") or "").lower() not in ("administrator", "admin")
+        if _norm(row.get("id")) not in excluded
+        and (row.get("role") or "").lower() not in ("administrator", "admin")
+        and not row.get("suspended_at")
     ]
 
     ranked = sorted(rows, key=lambda row: _knn_sort_key(query_embedding, row))
