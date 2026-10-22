@@ -20,18 +20,39 @@ def _parse_iso_datetime(dt_str: str | None) -> datetime | None:
         return None
 
 
+def _as_text(value) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _event_card(ev: dict) -> dict:
+    start_dt = _as_text(ev.get("start_datetime"))
+    end_dt = _as_text(ev.get("end_datetime"))
+    return {
+        "id": str(ev.get("id")),
+        "title": ev.get("title") or "",
+        "date": start_dt,
+        "start_datetime": start_dt,
+        "end_datetime": end_dt,
+        "status": ev.get("status"),
+        "is_cancelled": str(ev.get("status") or "").lower() == "cancelled",
+    }
+
+
 def _build_user_summary(profile: dict | None, user_id: str | None = None) -> dict:
     profile = profile or {}
     username = str(profile.get("username") or "").strip() or None
     full_name = profile.get("full_name")
     display_name = username or full_name
+    uid = profile.get("id") or user_id
 
     avatar_kind = str(profile.get("avatar_kind") or "").strip().lower()
     if avatar_kind not in ("photo", "icon"):
         avatar_kind = "icon"
 
     return {
-        "id": profile.get("id") or user_id,
+        "id": str(uid) if uid else None,
         "username": username,
         "full_name": full_name,
         "display_name": display_name,
@@ -207,10 +228,15 @@ def get_user_list_counters() -> dict:
         supabase.table("profiles").select("id", count="exact")
         .neq("role", "administrator").not_.is_("suspended_at", "null").execute()
     )
+    try:
+        warned = len(user_ids_with_counted_warnings())
+    except Exception as e:
+        logger.warning(f"get_user_list_counters warning count unavailable: {e}")
+        warned = 0
     return {
         "administrators": admins.count if admins.count is not None else len(admins.data or []),
         "suspended": suspended.count if suspended.count is not None else len(suspended.data or []),
-        "with_warnings": len(user_ids_with_counted_warnings()),
+        "with_warnings": warned,
     }
 
 
@@ -279,11 +305,18 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
     else:
         query = query.order("start_datetime", desc=True)
 
-    res = query.range(offset, offset + limit - 1).execute()
+    try:
+        res = query.range(offset, offset + limit - 1).execute()
+    except Exception as e:
+        logger.error(f"list_admin_events failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not load events.",
+        )
     total = res.count if res.count is not None else len(res.data or [])
     total_pages = max(1, math.ceil(total / limit))
 
-    raw_events = res.data or []
+    raw_events = [ev for ev in (res.data or []) if ev.get("id")]
     creator_ids = list(dict.fromkeys(ev.get("created_by") for ev in raw_events if ev.get("created_by")))
 
     organizer_map = {}
@@ -296,22 +329,34 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
                 .execute()
             )
             for p in (prof_res.data or []):
-                organizer_map[p["id"]] = _build_user_summary(p)
+                organizer_map[str(p["id"])] = _build_user_summary(p)
         except Exception as e:
             logger.error(f"Failed to fetch organizers for admin events: {e}")
 
     items = []
     for ev in raw_events:
         is_canc = str(ev.get("status") or "").lower() == "cancelled"
+        created_by = ev.get("created_by")
+        organizer = organizer_map.get(str(created_by) if created_by else "") or (
+            _build_user_summary(None, created_by) if created_by else None
+        )
+        if organizer and not organizer.get("id"):
+            organizer = None
+        start_dt = ev.get("start_datetime")
+        if start_dt is not None and not isinstance(start_dt, str):
+            start_dt = str(start_dt)
+        end_dt = ev.get("end_datetime")
+        if end_dt is not None and not isinstance(end_dt, str):
+            end_dt = str(end_dt)
         items.append({
-            "id": ev.get("id"),
-            "title": ev.get("title"),
-            "date": ev.get("start_datetime"),
-            "start_datetime": ev.get("start_datetime"),
-            "end_datetime": ev.get("end_datetime"),
+            "id": str(ev.get("id")),
+            "title": ev.get("title") or "",
+            "date": start_dt,
+            "start_datetime": start_dt,
+            "end_datetime": end_dt,
             "status": ev.get("status"),
             "is_cancelled": is_canc,
-            "organizer": organizer_map.get(ev.get("created_by")) or _build_user_summary(None, ev.get("created_by")),
+            "organizer": organizer,
         })
 
     return {
@@ -345,7 +390,7 @@ def get_admin_user_details(user_id: str) -> dict:
     profile = dict(prof_res.data)
     username = str(profile.get("username") or "").strip() or None
     full_name = profile.get("full_name")
-    is_admin = (profile.get("role") == "administrator")
+    is_admin = _is_admin_role(profile.get("role"))
     now_utc = datetime.now(timezone.utc)
 
     # 2. Fetch organized events
@@ -358,17 +403,10 @@ def get_admin_user_details(user_id: str) -> dict:
     )
     organized_events = {"upcoming": [], "past": [], "cancelled": []}
     for ev in (org_res.data or []):
-        is_canc = str(ev.get("status") or "").lower() == "cancelled"
-        item = {
-            "id": ev.get("id"),
-            "title": ev.get("title"),
-            "date": ev.get("start_datetime"),
-            "start_datetime": ev.get("start_datetime"),
-            "end_datetime": ev.get("end_datetime"),
-            "status": ev.get("status"),
-            "is_cancelled": is_canc,
-        }
-        if is_canc:
+        if not ev.get("id"):
+            continue
+        item = _event_card(ev)
+        if item["is_cancelled"]:
             organized_events["cancelled"].append(item)
         else:
             start_dt = _parse_iso_datetime(ev.get("start_datetime"))
@@ -396,17 +434,10 @@ def get_admin_user_details(user_id: str) -> dict:
             .execute()
         )
         for ev in (ev_res.data or []):
-            is_canc = str(ev.get("status") or "").lower() == "cancelled"
-            item = {
-                "id": ev.get("id"),
-                "title": ev.get("title"),
-                "date": ev.get("start_datetime"),
-                "start_datetime": ev.get("start_datetime"),
-                "end_datetime": ev.get("end_datetime"),
-                "status": ev.get("status"),
-                "is_cancelled": is_canc,
-            }
-            if is_canc:
+            if not ev.get("id"):
+                continue
+            item = _event_card(ev)
+            if item["is_cancelled"]:
                 joined_events["cancelled"].append(item)
             else:
                 start_dt = _parse_iso_datetime(ev.get("start_datetime"))
@@ -415,17 +446,23 @@ def get_admin_user_details(user_id: str) -> dict:
                 else:
                     joined_events["past"].append(item)
 
+    try:
+        warning_count = None if is_admin else counted_warning_counts([user_id]).get(user_id, 0)
+    except Exception as e:
+        logger.warning(f"Could not load warning count for {user_id}: {e}")
+        warning_count = None if is_admin else 0
+
     return {
-        "id": profile.get("id"),
+        "id": str(profile.get("id") or user_id),
         "username": username,
         "full_name": full_name,
         "display_name": username or full_name,
         "avatar_url": profile.get("avatar_url"),
         "avatar_kind": profile.get("avatar_kind") or "icon",
         "icon_id": profile.get("icon_id"),
-        "created_at": profile.get("created_at"),
+        "created_at": _as_text(profile.get("created_at")),
         "is_admin": is_admin,
-        "admin_since": profile.get("admin_since") if is_admin else None,
+        "admin_since": _as_text(profile.get("admin_since")) if is_admin else None,
         "role": profile.get("role") or "user",
         "warnings": [],
         "warning_history": [],
@@ -433,10 +470,9 @@ def get_admin_user_details(user_id: str) -> dict:
         "joined_events": joined_events,
         "profile_visibility": None if is_admin else (profile.get("visibility") or "public"),
         "status": None if is_admin else _account_status(profile),
-                # #192: the date the suspension started, and its reason (null when active).
-        "suspended_since": None if is_admin else profile.get("suspended_at"),
+        "suspended_since": None if is_admin else _as_text(profile.get("suspended_at")),
         "suspension_reason": None if is_admin else profile.get("suspension_reason"),
-        "warning_count": None if is_admin else counted_warning_counts([user_id]).get(user_id, 0),
+        "warning_count": warning_count,
         **({"friends": [], "blocked_users": [], "blocked_by": []} if is_admin else _relations_of(user_id)),
     }
 
@@ -470,14 +506,14 @@ def get_admin_account_details(admin_id: str) -> dict:
         logger.debug(f"Could not fetch auth email for admin {admin_id}: {e}")
 
     return {
-        "id": p.get("id"),
+        "id": str(p.get("id") or admin_id),
         "email": email,
         "username": p.get("username"),
         "full_name": p.get("full_name"),
         "avatar_url": p.get("avatar_url"),
         "avatar_kind": p.get("avatar_kind") or "icon",
         "icon_id": p.get("icon_id"),
-        "admin_since": p.get("admin_since"),
+        "admin_since": _as_text(p.get("admin_since")),
         "role": p.get("role") or "administrator",
     }
 
@@ -519,8 +555,10 @@ def get_admin_event_details(event_id: str) -> dict:
         except Exception as e:
             logger.error(f"Failed to fetch event organizer {event.get('created_by')}: {e}")
 
-    if not organizer:
+    if not organizer and event.get("created_by"):
         organizer = _build_user_summary(None, event.get("created_by"))
+    if organizer and not organizer.get("id"):
+        organizer = None
 
     # 3. Fetch participants
     part_res = (
@@ -563,7 +601,7 @@ def get_admin_event_details(event_id: str) -> dict:
             "avatar_kind": u_info.get("avatar_kind"),
             "icon_id": u_info.get("icon_id"),
             "status": p.get("status") or "registered",
-            "registered_at": p.get("created_at"),
+            "registered_at": _as_text(p.get("created_at")),
             "is_admin": is_part_admin,
         })
 
@@ -619,21 +657,21 @@ def get_admin_event_details(event_id: str) -> dict:
             "icon_id": icon_id,
             "text": c.get("content") or "",
             "content": c.get("content") or "",
-            "time": c.get("created_at"),
-            "created_at": c.get("created_at"),
+            "time": _as_text(c.get("created_at")),
+            "created_at": _as_text(c.get("created_at")),
             "is_system_message": is_system,
             "type": "system" if is_system else msg_type,
         }
         chats.append(item)
 
     return {
-        "id": event.get("id"),
-        "title": event.get("title"),
+        "id": str(event.get("id") or event_id),
+        "title": event.get("title") or "",
         "category": event.get("category"),
         "description": event.get("description"),
-        "date": event.get("start_datetime"),
-        "start_datetime": event.get("start_datetime"),
-        "end_datetime": event.get("end_datetime"),
+        "date": _as_text(event.get("start_datetime")),
+        "start_datetime": _as_text(event.get("start_datetime")),
+        "end_datetime": _as_text(event.get("end_datetime")),
         "location_name": event.get("location_name"),
         "latitude": event.get("latitude"),
         "longitude": event.get("longitude"),

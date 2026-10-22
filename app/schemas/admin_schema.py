@@ -45,7 +45,7 @@ class AdminUserListResponse(BaseModel):
 
 
 class AdminEventOrganizerSummary(BaseModel):
-    id: str
+    id: Optional[str] = None
     username: Optional[str] = None
     full_name: Optional[str] = None
     display_name: Optional[str] = None
@@ -58,7 +58,7 @@ class AdminEventOrganizerSummary(BaseModel):
 
 class AdminEventListItem(BaseModel):
     id: str
-    title: str
+    title: str = ""
     date: Optional[str] = None
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
@@ -79,7 +79,7 @@ class AdminEventListResponse(BaseModel):
 
 class AdminUserEventItem(BaseModel):
     id: str
-    title: str
+    title: str = ""
     date: Optional[str] = None
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
@@ -139,7 +139,7 @@ class AdminUserDetailResponse(BaseModel):
 
 
 class AdminParticipantItem(BaseModel):
-    id: str
+    id: Optional[str] = None
     username: Optional[str] = None
     full_name: Optional[str] = None
     display_name: Optional[str] = None
@@ -166,7 +166,7 @@ class AdminChatMessageSender(BaseModel):
 
 
 class AdminChatMessageItem(BaseModel):
-    id: int
+    id: int | str
     sender_id: Optional[str] = None
     sender: Optional[AdminChatMessageSender] = None
     username: Optional[str] = None
@@ -186,7 +186,7 @@ class AdminChatMessageItem(BaseModel):
 
 class AdminEventDetailResponse(BaseModel):
     id: str
-    title: str
+    title: str = ""
     category: Optional[str] = None
     description: Optional[str] = None
     date: Optional[str] = None

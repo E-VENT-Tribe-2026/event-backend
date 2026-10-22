@@ -174,6 +174,32 @@ class TestAdminPanel:
             assert item["is_cancelled"] is False
             assert item["organizer"]["username"] == "organizer_bob"
             assert item["organizer"]["full_name"] == "Bob Organizer"
+
+            alias = client.get("/api/admin/events?filter=upcoming")
+            assert alias.status_code == 200
+            assert alias.json()["items"][0]["title"] == "Hackathon 2026"
+        finally:
+            app.dependency_overrides.pop(require_admin, None)
+
+    @patch("app.services.admin_service.supabase")
+    def test_list_admin_events_tolerates_missing_title_and_organizer(self, mock_sb):
+        app.dependency_overrides[require_admin] = lambda: MockAdminUser()
+        try:
+            event_chain = MagicMock()
+            event_chain.select.return_value = event_chain
+            event_chain.order.return_value = event_chain
+            event_chain.range.return_value = event_chain
+            event_chain.execute.return_value = MagicMock(count=1, data=[
+                {"id": "e-empty", "title": None, "start_datetime": None, "status": "active", "created_by": None},
+            ])
+            mock_sb.table.return_value = event_chain
+
+            res = client.get("/api/admin/events/")
+            assert res.status_code == 200
+            item = res.json()["items"][0]
+            assert item["id"] == "e-empty"
+            assert item["title"] == ""
+            assert item["organizer"] is None
         finally:
             app.dependency_overrides.pop(require_admin, None)
 
@@ -818,3 +844,73 @@ class TestAdminPanel:
 
         trailing = client.get("/api/admin/users/", headers=headers)
         assert trailing.status_code == 200
+
+    @patch("app.services.admin_service.supabase")
+    @patch("app.core.dependencies.supabase")
+    def test_administrator_can_fetch_events_after_mfa(self, mock_dep_sb, mock_admin_sb):
+        admin_user = MagicMock()
+        admin_user.id = "admin-user-id"
+        mock_dep_sb.auth.get_user.return_value = MagicMock(user=admin_user)
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data={"role": "administrator"})
+        mock_dep_sb.table.return_value = profile_chain
+
+        event_chain = MagicMock()
+        event_chain.select.return_value = event_chain
+        event_chain.order.return_value = event_chain
+        event_chain.range.return_value = event_chain
+        event_chain.execute.return_value = MagicMock(count=1, data=[
+            {"id": "e1", "title": "Meetup", "start_datetime": "2026-11-01T10:00:00Z", "status": "active", "created_by": None},
+        ])
+        mock_admin_sb.table.return_value = event_chain
+
+        admin_token = _create_jwt({"sub": "admin-user-id", "aal": "aal2"})
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        res = client.get("/api/admin/events/", headers=headers)
+        assert res.status_code == 200
+        assert res.json()["items"][0]["title"] == "Meetup"
+
+        aliased = client.get("/api/admin/events?filter=all", headers=headers)
+        assert aliased.status_code == 200
+
+    def test_remaining_admin_gets_accept_trailing_slash(self):
+        app.dependency_overrides[require_admin] = lambda: MockAdminUser()
+        cases = [
+            ("/api/admin/verify/", None, None),
+            ("/api/admin/account/", "app.api.v1.admin_routes.get_admin_account_details", {
+                "id": "a1", "role": "administrator",
+            }),
+            ("/api/admin/counts/", "app.api.v1.admin_routes.get_admin_counts", {
+                "total_users": 0, "events": {"total": 0, "upcoming": 0, "past": 0, "cancelled": 0},
+            }),
+            ("/api/admin/users/counters/", "app.api.v1.admin_routes.get_user_list_counters", {
+                "administrators": 0, "suspended": 0, "with_warnings": 0,
+            }),
+            ("/api/admin/users/u1/", "app.api.v1.admin_routes.get_admin_user_details", {
+                "id": "u1",
+                "organized_events": {"upcoming": [], "past": [], "cancelled": []},
+                "joined_events": {"upcoming": [], "past": [], "cancelled": []},
+            }),
+            ("/api/admin/events/e1/", "app.api.v1.admin_routes.get_admin_event_details", {
+                "id": "e1", "title": "Meetup", "participants": [], "chats": [], "chat": [],
+            }),
+            ("/api/admin/users/u1/warnings/", "app.api.v1.admin_routes.get_warning_history", {
+                "user_id": "u1", "items": [],
+            }),
+            ("/api/admin/audit-log/", "app.api.v1.admin_routes.list_audit_log", {
+                "items": [], "has_more": False, "next_before": None,
+            }),
+        ]
+        try:
+            for url, target, payload in cases:
+                if target:
+                    with patch(target, return_value=payload):
+                        res = client.get(url)
+                else:
+                    res = client.get(url)
+                assert res.status_code == 200, f"{url} returned {res.status_code}: {res.text}"
+        finally:
+            app.dependency_overrides.pop(require_admin, None)

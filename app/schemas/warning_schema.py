@@ -6,7 +6,7 @@ WARNING_REASON_MAX_LENGTH = 1000
 
 class PersonSummary(BaseModel):
     """Profile picture, full name and username of a person shown in the panel."""
-    id: str
+    id: Optional[str] = None
     username: Optional[str] = None
     full_name: Optional[str] = None
     display_name: Optional[str] = None
