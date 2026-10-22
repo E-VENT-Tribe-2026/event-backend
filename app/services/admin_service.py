@@ -92,23 +92,49 @@ def get_admin_counts() -> dict:
     }
 
 
-def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) -> dict:
+def _is_admin_role(role) -> bool:
+    return role in ("administrator", "admin")
+
+
+def _account_status(profile: dict) -> str:
+    return "suspended" if profile.get("suspended_at") else "active"
+
+
+def _empty_page(page: int, limit: int) -> dict:
+    return {"items": [], "total": 0, "page": page, "limit": limit, "total_pages": 1}
+
+
+def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20,
+                     filter_by: str | None = None) -> dict:
     """
     Lists every registered account (public and private) in pages.
-    Supports case-insensitive substring search by username.
+    Supports case-insensitive substring search by username, combined with
+    one counter filter: administrators, suspended or with_warnings.
     """
+    from app.services.warning_service import counted_warning_counts, user_ids_with_counted_warnings
+
     page = max(1, page)
     limit = max(1, min(100, limit))
     offset = (page - 1) * limit
 
     query = supabase.table("profiles").select(
-        "id, username, full_name, avatar_url, avatar_kind, icon_id, role, created_at",
+        "id, username, full_name, avatar_url, avatar_kind, icon_id, role, created_at, suspended_at",
         count="exact"
     )
 
     pattern = like_contains(search) if search else None
     if pattern:
         query = query.ilike("username", pattern)
+
+    if filter_by == "administrators":
+        query = query.eq("role", "administrator")
+    elif filter_by == "suspended":
+        query = query.neq("role", "administrator").not_.is_("suspended_at", "null")
+    elif filter_by == "with_warnings":
+        warned_ids = user_ids_with_counted_warnings()
+        if not warned_ids:
+            return _empty_page(page, limit)
+        query = query.in_("id", warned_ids)
 
     res = (
         query
@@ -120,11 +146,15 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
     total = res.count if res.count is not None else len(res.data or [])
     total_pages = max(1, math.ceil(total / limit))
 
+    rows = res.data or []
+    counts = counted_warning_counts([r.get("id") for r in rows if not _is_admin_role(r.get("role"))])
+
     items = []
-    for row in (res.data or []):
+    for row in rows:
         username = str(row.get("username") or "").strip() or None
         full_name = row.get("full_name")
         role = row.get("role") or "user"
+        is_admin = _is_admin_role(role)
         items.append({
             "id": row.get("id"),
             "username": username,
@@ -136,6 +166,9 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
             "role": role,
             "is_admin": (role == "administrator"),
             "created_at": row.get("created_at"),
+            # #191: an administrator's entry shows the role only.
+            "warning_count": None if is_admin else counts.get(row.get("id"), 0),
+            "status": None if is_admin else _account_status(row),
         })
 
     return {
@@ -146,6 +179,55 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20) 
         "total_pages": total_pages,
     }
 
+def get_user_list_counters() -> dict:
+    """The three counters at the top of the user list."""
+    from app.services.warning_service import user_ids_with_counted_warnings
+
+    admins = (
+        supabase.table("profiles").select("id", count="exact")
+        .eq("role", "administrator").execute()
+    )
+    suspended = (
+        supabase.table("profiles").select("id", count="exact")
+        .neq("role", "administrator").not_.is_("suspended_at", "null").execute()
+    )
+    return {
+        "administrators": admins.count if admins.count is not None else len(admins.data or []),
+        "suspended": suspended.count if suspended.count is not None else len(suspended.data or []),
+        "with_warnings": len(user_ids_with_counted_warnings()),
+    }
+
+
+def _summaries_for(ids) -> list:
+    ids = list(dict.fromkeys(i for i in ids if i))
+    if not ids:
+        return []
+    res = (
+        supabase.table("profiles")
+        .select("id, username, full_name, avatar_url, avatar_kind, icon_id")
+        .in_("id", ids)
+        .execute()
+    )
+    return [_build_user_summary(row) for row in (res.data or [])]
+
+
+def _relations_of(user_id: str) -> dict:
+    """Friends, users they blocked, users who blocked them. Ignores profile visibility on purpose."""
+    friends = (
+        supabase.table("friendships").select("user_id, friend_id")
+        .or_(f"user_id.eq.{user_id},friend_id.eq.{user_id}").execute()
+    )
+    friend_ids = [
+        r["friend_id"] if str(r["user_id"]) == str(user_id) else r["user_id"]
+        for r in (friends.data or [])
+    ]
+    blocked = supabase.table("user_blocks").select("blocked_id").eq("blocker_id", user_id).execute()
+    blocked_by = supabase.table("user_blocks").select("blocker_id").eq("blocked_id", user_id).execute()
+    return {
+        "friends": _summaries_for(friend_ids),
+        "blocked_users": _summaries_for(r["blocked_id"] for r in (blocked.data or [])),
+        "blocked_by": _summaries_for(r["blocker_id"] for r in (blocked_by.data or [])),
+    }
 
 def list_admin_events(status_filter: str = "all", search: str | None = None, page: int = 1, limit: int = 20) -> dict:
     """
@@ -232,6 +314,7 @@ def get_admin_user_details(user_id: str) -> dict:
     - Events they organize (upcoming, past, cancelled).
     - Events they joined (upcoming, past, cancelled).
     """
+    from app.services.warning_service import counted_warning_counts
     # 1. Fetch user profile
     prof_res = (
         supabase.table("profiles")
@@ -326,9 +409,60 @@ def get_admin_user_details(user_id: str) -> dict:
         "icon_id": profile.get("icon_id"),
         "created_at": profile.get("created_at"),
         "is_admin": is_admin,
+        "admin_since": profile.get("admin_since") if is_admin else None,
         "role": profile.get("role") or "user",
+        "warnings": [],
+        "warning_history": [],
         "organized_events": organized_events,
         "joined_events": joined_events,
+        "profile_visibility": None if is_admin else (profile.get("visibility") or "public"),
+        "status": None if is_admin else _account_status(profile),
+                # #192: the date the suspension started, and its reason (null when active).
+        "suspended_since": None if is_admin else profile.get("suspended_at"),
+        "suspension_reason": None if is_admin else profile.get("suspension_reason"),
+        "warning_count": None if is_admin else counted_warning_counts([user_id]).get(user_id, 0),
+        **({"friends": [], "blocked_users": [], "blocked_by": []} if is_admin else _relations_of(user_id)),
+    }
+
+
+def get_admin_account_details(admin_id: str) -> dict:
+    """
+    Returns the signed-in administrator's account details for the account screen:
+    profile picture, full name, username and the date they became an administrator.
+    """
+    prof_res = (
+        supabase.table("profiles")
+        .select("id, username, full_name, avatar_url, avatar_kind, icon_id, admin_since, role")
+        .eq("id", admin_id)
+        .single()
+        .execute()
+    )
+    if not prof_res or not prof_res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Administrator profile not found.")
+
+    p = prof_res.data
+    email = None
+    try:
+        from app.core.config import settings
+        from supabase import create_client
+        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
+            admin_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+            user_auth = admin_client.auth.admin.get_user_by_id(admin_id)
+            if user_auth and user_auth.user:
+                email = user_auth.user.email
+    except Exception as e:
+        logger.debug(f"Could not fetch auth email for admin {admin_id}: {e}")
+
+    return {
+        "id": p.get("id"),
+        "email": email,
+        "username": p.get("username"),
+        "full_name": p.get("full_name"),
+        "avatar_url": p.get("avatar_url"),
+        "avatar_kind": p.get("avatar_kind") or "icon",
+        "icon_id": p.get("icon_id"),
+        "admin_since": p.get("admin_since"),
+        "role": p.get("role") or "administrator",
     }
 
 
@@ -384,22 +518,26 @@ def get_admin_event_details(event_id: str) -> dict:
     part_user_ids = list(dict.fromkeys(p["user_id"] for p in raw_participants if p.get("user_id")))
 
     profile_map = {}
+    role_map = {}
     if part_user_ids:
         try:
             prof_res = (
                 supabase.table("profiles")
-                .select("id, username, full_name, avatar_url, avatar_kind, icon_id")
+                .select("id, username, full_name, avatar_url, avatar_kind, icon_id, role")
                 .in_("id", part_user_ids)
                 .execute()
             )
             for p in (prof_res.data or []):
                 profile_map[p["id"]] = _build_user_summary(p)
+                role_map[p["id"]] = p.get("role")
         except Exception as e:
             logger.error(f"Failed to fetch participant profiles for event {event_id}: {e}")
 
     participants = []
     for p in raw_participants:
         u_info = profile_map.get(p.get("user_id")) or _build_user_summary(None, p.get("user_id"))
+        p_role = role_map.get(p.get("user_id"))
+        is_part_admin = (p_role in ("administrator", "admin"))
         participants.append({
             "id": u_info.get("id"),
             "username": u_info.get("username"),
@@ -410,6 +548,7 @@ def get_admin_event_details(event_id: str) -> dict:
             "icon_id": u_info.get("icon_id"),
             "status": p.get("status") or "registered",
             "registered_at": p.get("created_at"),
+            "is_admin": is_part_admin,
         })
 
     # 4. Fetch chat messages
@@ -486,6 +625,7 @@ def get_admin_event_details(event_id: str) -> dict:
         "max_capacity": event.get("max_capacity"),
         "status": event.get("status"),
         "is_cancelled": is_canc,
+        "cancellation_reason": event.get("cancellation_reason"),
         "organizer": organizer,
         "participant_count": len(participants),
         "participants": participants,
@@ -493,10 +633,104 @@ def get_admin_event_details(event_id: str) -> dict:
         "chat": chats,
     }
 
+def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_text: str) -> tuple[int, int]:
+    """
+    Shared by "make administrator" (#190) and "suspend" (#192):
+    cancels the user's upcoming organized events (reason recorded, participants notified
+    and emailed; a cancelled event's chat is read-only) and removes the user from upcoming
+    events they joined. Past events are not touched.
+    notification_text may contain {title}.
+    Returns (cancelled_events_count, joined_events_removed_count).
+    """
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+
+    # a. Cancel upcoming events organized by this user
+    cancelled_events_count = 0
+    try:
+        org_events_res = (
+            supabase.table("events")
+            .select("id, title, start_datetime, status")
+            .eq("created_by", user_id)
+            .neq("status", "cancelled")
+            .execute()
+        )
+        for ev in (org_events_res.data or []):
+            start_dt = _parse_iso_datetime(ev.get("start_datetime"))
+            if start_dt and start_dt >= now_dt:
+                ev_id = ev["id"]
+                supabase.table("events").update({
+                    "status": "cancelled",
+                    "cancellation_reason": cancellation_reason,
+                    "updated_at": now_iso
+                }).eq("id", ev_id).execute()
+
+                cancelled_events_count += 1
+
+                # Send notifications to participants
+                try:
+                    from app.services.notification_service import create_notification
+                    part_res = (
+                        supabase.table("event_participants")
+                        .select("user_id")
+                        .eq("event_id", ev_id)
+                        .execute()
+                    )
+                    for p in (part_res.data or []):
+                        if p.get("user_id") and p["user_id"] != user_id:
+                            create_notification(
+                                p["user_id"],
+                                ev_id,
+                                "event_cancelled",
+                                notification_text.format(title=ev.get("title"))
+                            )
+                except Exception as n_err:
+                    logger.warning(f"Failed to notify participants for cancelled event {ev_id}: {n_err}")
+
+                try:
+                    from app.services.event_service import _email_participants
+                    _email_participants(ev, "cancellation")
+                except Exception as em_err:
+                    logger.warning(f"Failed to email participants for cancelled event {ev_id}: {em_err}")
+    except Exception as e:
+        logger.error(f"Error cancelling organized events for user {user_id}: {e}")
+
+    # b. Take them off upcoming events they joined
+    joined_events_removed_count = 0
+    try:
+        joined_res = (
+            supabase.table("event_participants")
+            .select("id, event_id")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        joined_rows = joined_res.data or []
+        if joined_rows:
+            ev_ids = [r["event_id"] for r in joined_rows if r.get("event_id")]
+            if ev_ids:
+                events_info = (
+                    supabase.table("events")
+                    .select("id, start_datetime")
+                    .in_("id", ev_ids)
+                    .execute()
+                ).data or []
+                upcoming_event_ids = {
+                    e["id"] for e in events_info
+                    if _parse_iso_datetime(e.get("start_datetime")) and _parse_iso_datetime(e.get("start_datetime")) >= now_dt
+                }
+                for r in joined_rows:
+                    if r.get("event_id") in upcoming_event_ids:
+                        supabase.table("event_participants").delete().eq("id", r["id"]).execute()
+                        joined_events_removed_count += 1
+    except Exception as e:
+        logger.error(f"Error removing joined events for user {user_id}: {e}")
+
+    return cancelled_events_count, joined_events_removed_count
 
 def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     """
-    Grants the administrator role to an account that is not an administrator.
+    Grants the administrator role to an account that is not an administrator,
+    ending everything active in that account and recording the audit log.
     Refuses if the account already is an administrator.
     Offers no way to remove the administrator role.
     """
@@ -509,7 +743,7 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     try:
         prof_res = (
             supabase.table("profiles")
-            .select("id, role")
+            .select("id, role, username, full_name, avatar_url, avatar_kind, icon_id")
             .eq("id", cleaned_user_id)
             .single()
             .execute()
@@ -519,7 +753,7 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         try:
             prof_res = (
                 supabase.table("profiles")
-                .select("id, role")
+                .select("id, role, username, full_name, avatar_url, avatar_kind, icon_id")
                 .eq("username", cleaned_user_id)
                 .single()
                 .execute()
@@ -530,8 +764,9 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     if not prof_res or not prof_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
-    actual_target_id = prof_res.data.get("id")
-    current_role = prof_res.data.get("role")
+    prof_data = prof_res.data[0] if isinstance(prof_res.data, list) and prof_res.data else (prof_res.data or {})
+    actual_target_id = prof_data.get("id")
+    current_role = prof_data.get("role")
     if current_role in ("administrator", "admin"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -546,18 +781,122 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not re-assert service key on postgrest client: {e}")
 
-    # 2. Update role to administrator
-    upd_res = (
-        supabase.table("profiles")
-        .update({"role": "administrator"})
-        .eq("id", actual_target_id)
-        .execute()
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+
+        # 2.-3. Cancel upcoming organized events and leave upcoming joined events
+    cancelled_events_count, joined_events_removed_count = end_upcoming_activity(
+        actual_target_id,
+        cancellation_reason="Organizer was made an administrator",
+        notification_text="Event '{title}' was cancelled because organizer was made an administrator",
     )
-    if not upd_res.data:
+
+    # 4. Delete friends in both directions
+    try:
+        supabase.table("friendships").delete().eq("user_id", actual_target_id).execute()
+        supabase.table("friendships").delete().eq("friend_id", actual_target_id).execute()
+    except Exception as e:
+        logger.error(f"Error deleting friendships for user {actual_target_id}: {e}")
+
+    # 5. Delete pending friend requests in both directions
+    try:
+        supabase.table("friend_requests").delete().eq("initiator_id", actual_target_id).execute()
+        supabase.table("friend_requests").delete().eq("receiver_id", actual_target_id).execute()
+    except Exception as e:
+        logger.error(f"Error deleting friend requests for user {actual_target_id}: {e}")
+
+    # 6. Delete blocks in both directions
+    try:
+        supabase.table("user_blocks").delete().eq("blocker_id", actual_target_id).execute()
+        supabase.table("user_blocks").delete().eq("blocked_id", actual_target_id).execute()
+    except Exception as e:
+        logger.error(f"Error deleting blocks for user {actual_target_id}: {e}")
+
+    # 7. Delete favourites (saved_events)
+    try:
+        supabase.table("saved_events").delete().eq("user_id", actual_target_id).execute()
+    except Exception as e:
+        logger.error(f"Error deleting saved events for user {actual_target_id}: {e}")
+
+    # 8. Delete notifications
+    try:
+        supabase.table("notifications").delete().eq("user_id", actual_target_id).execute()
+        supabase.table("notifications").delete().eq("actor_id", actual_target_id).execute()
+    except Exception as e:
+        logger.error(f"Error deleting notifications for user {actual_target_id}: {e}")
+
+    # 9. Defensively delete warnings
+    try:
+        supabase.table("warnings").delete().eq("user_id", actual_target_id).execute()
+    except Exception:
+        pass
+
+    # 10. Purge profile data, retaining only profile picture, full name and username
+    try:
+        profile_update = {
+            "role": "administrator",
+            "admin_since": now_iso,
+            "bio": None,
+            "interests": None,
+            "phone": None,
+            "gender": None,
+            "banner_url": None,
+            "latitude": None,
+            "longitude": None,
+            "dob": None,
+            "tier_id": None,
+            "visibility": "public",
+            "profile_status": None,
+            "is_verified": False,
+            "updated_at": now_iso,
+        }
+        supabase.table("profiles").update(profile_update).eq("id", actual_target_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update profile to administrator for {actual_target_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant administrator role.")
 
+    # 11. End their sessions at once
+    try:
+        from app.core.config import settings
+        import requests
+        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
+            logout_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{actual_target_id}/logout"
+            headers = {
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+                "apikey": settings.SUPABASE_SERVICE_KEY,
+            }
+            requests.post(logout_url, headers=headers, timeout=5)
+    except Exception as e:
+        logger.warning(f"Could not revoke sessions for user {actual_target_id}: {e}")
+
+    # 12. Record in audit log
+    summary_dict = {
+        "cancelled_events_count": cancelled_events_count,
+        "joined_events_removed_count": joined_events_removed_count,
+        "friendships_deleted": True,
+        "friend_requests_deleted": True,
+        "blocks_deleted": True,
+        "saved_events_deleted": True,
+        "notifications_deleted": True,
+        "profile_purged": True,
+    }
+    try:
+        audit_entry = {
+            "type": "make_admin",
+            "description": f"User {actual_target_id} was made an administrator. Cancelled {cancelled_events_count} upcoming events, removed from joined upcoming events, and purged user profile data.",
+            "created_by_id": admin_user_id,
+            "entity_id": str(actual_target_id),
+            "values": [f"{k}:{v}" for k, v in summary_dict.items()],
+            "created_date": now_iso,
+        }
+        supabase.table("logs").insert(audit_entry).execute()
+    except Exception as e:
+        logger.warning(f"Could not write audit log for user {actual_target_id}: {e}")
+
     return {
-        "message": "Administrator role granted successfully.",
+        "message": "User made administrator successfully.",
         "user_id": actual_target_id,
         "role": "administrator",
+        "admin_since": now_iso,
+        "summary": summary_dict,
     }

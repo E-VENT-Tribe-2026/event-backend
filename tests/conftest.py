@@ -1,7 +1,15 @@
 import pytest
 from unittest.mock import patch
 
+from app.core.user_rate_limit import reset_user_rate_limits
 from tests._supabase_mock import make_table_router
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Tests share one mock user, so per-user request counts must not leak between tests."""
+    reset_user_rate_limits()
+    yield
 
 
 @pytest.fixture(autouse=True)

@@ -8,7 +8,11 @@ from app.services.profile_service import (
     get_user_summaries,
     get_username,
 )
-from app.services.notification_service import create_notification, delete_notifications_for
+from app.services.notification_service import (
+    create_notification,
+    delete_notifications_for,
+    delete_notifications_for_request,
+)
 from app.services.block_visibility import get_hidden_user_ids, has_blocked
 from app.utils.embedding_helper import cosine_similarity, generate_embedding, parse_embedding
 
@@ -161,8 +165,10 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     except ValueError:
         raise friend_error(404, "user_not_found", "User not found.")
 
-    profile = supabase.table("profiles").select("id").eq("id", receiver_id).limit(1).execute()
+    profile = supabase.table("profiles").select("id, role").eq("id", receiver_id).limit(1).execute()
     if not profile.data:
+        raise friend_error(404, "user_not_found", "User not found.")
+    if (profile.data[0].get("role") or "").lower() in ("administrator", "admin"):
         raise friend_error(404, "user_not_found", "User not found.")
 
     # A user who was blocked gets the same answer as for a user that does not exist.
@@ -208,10 +214,18 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
             receiver_id, None, FRIEND_REQUEST_RECEIVED,
             f"{get_username(sender_id)} sent you a friend request",
             related_user_id=sender_id,
+            actor_id=sender_id,
+            friend_request_id=row["id"],
         )
     except Exception:
         logger.error("Failed to create friend request notification on send: request_id=%s initiator=%s receiver=%s",
                      row["id"], sender_id, receiver_id, exc_info=True)
+        try:
+            supabase.table("friend_requests").delete().eq("id", row["id"]).execute()
+        except Exception:
+            logger.error("Failed to rollback friend request insert after notification failure: request_id=%s",
+                         row["id"], exc_info=True)
+        raise
 
     return {
         "request_id": row["id"],
@@ -236,12 +250,16 @@ def _claim_request(request_id: int, role_column: str, user_id: str) -> dict:
 
 
 def _cleanup_request_notification(row: dict, context: str):
-    """Remove the receiver's friend-request notification, never failing the caller."""
+    """Remove the receiver's friend-request notification."""
     try:
-        delete_notifications_for(row["receiver_id"], FRIEND_REQUEST_RECEIVED, row["initiator_id"])
+        deleted = delete_notifications_for_request(row["id"])
+        if not deleted:
+            # Notifications created before friend_request_id was populated.
+            delete_notifications_for(row["receiver_id"], FRIEND_REQUEST_RECEIVED, row["initiator_id"])
     except Exception:
         logger.error("Failed to clean up friend request notification on %s: request_id=%s initiator=%s receiver=%s",
                      context, row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
+        raise
 
 
 def _restore_request(row: dict):
@@ -255,7 +273,7 @@ def _restore_request(row: dict):
             "created_at": row["created_at"],
         }).execute()
     except Exception:
-        logger.error("Failed to restore friend request on accept: request_id=%s initiator=%s receiver=%s",
+        logger.error("Failed to restore friend request: request_id=%s initiator=%s receiver=%s",
                      row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
 
 
@@ -372,7 +390,11 @@ def cancel_friend_request(request_id: int, user_id: str) -> dict:
         raise friend_error(403, "not_request_sender", "Only the sender can cancel this friend request.")
 
     _claim_request(request_id, "initiator_id", user_id)
-    _cleanup_request_notification(row, "cancel")
+    try:
+        _cleanup_request_notification(row, "cancel")
+    except Exception:
+        _restore_request(row)
+        raise
     return {"message": "Friend request cancelled"}
 
 
@@ -392,18 +414,34 @@ def accept_friend_request(request_id: int, user_id: str) -> dict:
     # missing (undeployed migration / schema cache) or cannot return its row type.
     friendship = _accept_atomically(request_id, user_id, row)
 
-    _cleanup_request_notification(row, "accept")
-
-    if friendship["created"]:
-        try:
+    notification_created = False
+    try:
+        if friendship["created"]:
             create_notification(
                 initiator, None, FRIEND_REQUEST_ACCEPTED,
                 f"{get_username(receiver)} accepted your friend request",
                 related_user_id=receiver,
             )
-        except Exception:
-            logger.error("Failed to create friend accepted notification on accept: request_id=%s initiator=%s receiver=%s",
-                         request_id, initiator, receiver, exc_info=True)
+            notification_created = True
+
+        _cleanup_request_notification(row, "accept")
+    except Exception:
+        logger.error("Failed notification operation on accept: request_id=%s initiator=%s receiver=%s",
+                     request_id, initiator, receiver, exc_info=True)
+        if notification_created:
+            try:
+                delete_notifications_for(initiator, FRIEND_REQUEST_ACCEPTED, receiver)
+            except Exception:
+                logger.error("Failed to delete acceptance notification during rollback on accept: initiator=%s receiver=%s",
+                             initiator, receiver, exc_info=True)
+        if friendship["created"]:
+            try:
+                supabase.table("friendships").delete().or_(_pair_filter(initiator, receiver, "user_id", "friend_id")).execute()
+            except Exception:
+                logger.error("Failed to delete friendship during rollback on accept: initiator=%s receiver=%s",
+                             initiator, receiver, exc_info=True)
+        _restore_request(row)
+        raise
 
     return {
         "friend_since": friendship["friend_since"],
@@ -419,7 +457,11 @@ def decline_friend_request(request_id: int, user_id: str) -> dict:
                            "Only the recipient can accept or decline this friend request.")
 
     _claim_request(request_id, "receiver_id", user_id)
-    _cleanup_request_notification(row, "decline")
+    try:
+        _cleanup_request_notification(row, "decline")
+    except Exception:
+        _restore_request(row)
+        raise
     return {"message": "Friend request declined"}
 
 
@@ -494,6 +536,40 @@ def get_friends(user_id: str, page: int = 1, limit: int = DEFAULT_PAGE_LIMIT) ->
         {"friend_since": r["created_at"], "user": summaries[other]}
         for r, other in zip(rows, others)
     ]
+    return {"page": page, "limit": limit, "has_more": has_more, "data": data}
+
+
+def get_user_friends_summary_page(
+    user_id: str,
+    page: int = 1,
+    limit: int = DEFAULT_PAGE_LIMIT,
+    viewer_id: str | None = None,
+) -> dict:
+    """Return a paginated list of UserSummary objects representing user_id's friends."""
+    start = (page - 1) * limit
+    try:
+        uid = _uuid(user_id)
+    except ValueError:
+        return {"page": page, "limit": limit, "has_more": False, "data": []}
+
+    resp = (
+        supabase.table("friendships")
+        .select(FRIENDSHIP_COLUMNS)
+        .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
+        .order("created_at", desc=True)
+        .order("id", desc=True)
+        .range(start, start + limit)
+        .execute()
+    )
+    rows, has_more = _page(resp.data or [], limit)
+
+    others = [r["friend_id"] if _norm(r["user_id"]) == _norm(uid) else r["user_id"] for r in rows]
+    if viewer_id:
+        hidden = set(get_hidden_user_ids(viewer_id))
+        others = [o for o in others if o not in hidden]
+
+    summaries = get_user_summaries(others) if others else {}
+    data = [summaries.get(other) or build_user_summary(None, other) for other in others]
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}
 
 
@@ -593,12 +669,18 @@ def get_friend_suggestions(user_id: str, page: int = 1, limit: int = DEFAULT_PAG
     excluded = friend_ids | pending_ids | get_hidden_user_ids(uid) | {_norm(uid)}
     query_embedding = _viewer_interest_embedding(uid)
 
-    candidates = supabase.table("profiles").select(SUGGESTION_COLUMNS)
+    candidates = (
+        supabase.table("profiles").select(SUGGESTION_COLUMNS)
+        .neq("role", "administrator").neq("role", "admin")
+        .is_("suspended_at", "null")          # suspended accounts are never suggested (#192)
+    )
     if excluded:
         candidates = candidates.not_.in_("id", list(excluded))
     rows = [
         row for row in (candidates.execute().data or [])
         if _norm(row.get("id")) not in excluded
+        and (row.get("role") or "").lower() not in ("administrator", "admin")
+        and not row.get("suspended_at")
     ]
 
     ranked = sorted(rows, key=lambda row: _knn_sort_key(query_embedding, row))

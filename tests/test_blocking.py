@@ -394,6 +394,9 @@ class TestEventHiding:
         assert client.get(f"/api/events/{E_B}", headers=HEADERS).status_code == 200
 
     def test_another_users_profile_events(self, blocked):
+        for u in (B, D, A):
+            blocked.add("friendships", {"user_id": C, "friend_id": u, "origin": C, "status": "active"})
+
         def seen(viewer):
             as_user(viewer)
             events = client.get(f"/api/profile/{C}", headers=HEADERS).json()["events"]

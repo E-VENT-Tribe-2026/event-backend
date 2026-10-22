@@ -14,6 +14,12 @@ class NotificationResponse(BaseModel):
     created_at: datetime
     related_user_id: Optional[str] = None
     related_user: Optional[UserSummary] = None
+        # Warnings (#191). For other notifications is_warning is False and the rest null.
+    # For a warning, `message` is the reason.
+    warning_id: Optional[int] = None
+    is_warning: bool = False
+    warning_acknowledged: Optional[bool] = None
+    warning_withdrawn: Optional[bool] = None
 
 
 class NotificationUpdateRequest(BaseModel):

@@ -47,6 +47,7 @@ class TestAdminPanel:
             ("GET", "/api/admin/users/some-id"),
             ("GET", "/api/admin/events"),
             ("GET", "/api/admin/events/some-id"),
+            ("GET", "/api/admin/account"),
             ("POST", "/api/admin/users/some-id/grant-admin"),
         ]
 
@@ -100,8 +101,9 @@ class TestAdminPanel:
             app.dependency_overrides.pop(require_admin, None)
 
     # 3. List users with pagination and search
+    @patch("app.services.warning_service.supabase")
     @patch("app.services.admin_service.supabase")
-    def test_list_admin_users(self, mock_sb):
+    def test_list_admin_users(self, mock_sb, _mock_warnings_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
             users_data = [
@@ -176,8 +178,9 @@ class TestAdminPanel:
             app.dependency_overrides.pop(require_admin, None)
 
     # 5. User details with organized and joined events
+    @patch("app.services.warning_service.supabase")
     @patch("app.services.admin_service.supabase")
-    def test_get_admin_user_details(self, mock_sb):
+    def test_get_admin_user_details(self, mock_sb, _mock_warnings_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
             now = datetime.now(timezone.utc)
@@ -334,24 +337,48 @@ class TestAdminPanel:
     def test_grant_admin_role_success(self, mock_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
-            select_chain = MagicMock()
-            select_chain.select.return_value = select_chain
-            select_chain.eq.return_value = select_chain
-            select_chain.single.return_value = select_chain
-            select_chain.execute.return_value = MagicMock(data={"id": "target-u1", "role": "user"})
+            now = datetime.now(timezone.utc)
+            future_iso = (now + timedelta(days=2)).isoformat()
 
-            update_chain = MagicMock()
-            update_chain.update.return_value = update_chain
-            update_chain.eq.return_value = update_chain
-            update_chain.execute.return_value = MagicMock(data=[{"id": "target-u1", "role": "administrator"}])
+            def table_router(table_name):
+                chain = MagicMock()
+                chain.select.return_value = chain
+                chain.eq.return_value = chain
+                chain.neq.return_value = chain
+                chain.single.return_value = chain
+                chain.update.return_value = chain
+                chain.delete.return_value = chain
+                chain.insert.return_value = chain
 
-            mock_sb.table.side_effect = [select_chain, update_chain]
+                if table_name == "profiles":
+                    # select target profile then update
+                    chain.execute.return_value = MagicMock(data=[{
+                        "id": "target-u1",
+                        "username": "alice",
+                        "full_name": "Alice Wonderland",
+                        "role": "user"
+                    }])
+                elif table_name == "events":
+                    chain.execute.return_value = MagicMock(data=[
+                        {"id": "ev-1", "title": "Upcoming Event", "start_datetime": future_iso, "status": "active"}
+                    ])
+                elif table_name == "event_participants":
+                    chain.execute.return_value = MagicMock(data=[
+                        {"id": "p-1", "user_id": "other-u2"}
+                    ])
+                else:
+                    chain.execute.return_value = MagicMock(data=[])
+                return chain
+
+            mock_sb.table.side_effect = table_router
 
             res = client.post("/api/admin/users/target-u1/grant-admin")
             assert res.status_code == 200
             data = res.json()
             assert data["role"] == "administrator"
             assert data["user_id"] == "target-u1"
+            assert "admin_since" in data
+            assert data["summary"]["cancelled_events_count"] == 1
         finally:
             app.dependency_overrides.pop(require_admin, None)
 
@@ -524,3 +551,206 @@ class TestAdminPanel:
         res = client.get("/api/admin/events/any-event-id", headers=headers)
         assert res.status_code == 403
         assert "Forbidden" in res.json()["detail"]
+
+    # 10. Administrator Account Details Endpoint
+    @patch("app.services.admin_service.supabase")
+    def test_get_admin_account_details(self, mock_sb):
+        app.dependency_overrides[require_admin] = lambda: MockAdminUser()
+        try:
+            chain = MagicMock()
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.single.return_value = chain
+            chain.execute.return_value = MagicMock(data={
+                "id": "admin-uuid-1",
+                "username": "admin_boss",
+                "full_name": "Admin Boss",
+                "avatar_url": "https://img.com/admin.png",
+                "avatar_kind": "photo",
+                "icon_id": None,
+                "admin_since": "2026-03-01T12:00:00Z",
+                "role": "administrator",
+            })
+            mock_sb.table.return_value = chain
+
+            res = client.get("/api/admin/account")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["id"] == "admin-uuid-1"
+            assert data["username"] == "admin_boss"
+            assert data["full_name"] == "Admin Boss"
+            assert data["admin_since"] == "2026-03-01T12:00:00Z"
+            assert data["role"] == "administrator"
+        finally:
+            app.dependency_overrides.pop(require_admin, None)
+
+    # 11. User Details says whether account is administrator, since when, and empty warning history
+    @patch("app.services.admin_service.supabase")
+    def test_admin_user_details_returns_admin_since_and_no_warnings(self, mock_sb):
+        app.dependency_overrides[require_admin] = lambda: MockAdminUser()
+        try:
+            prof_chain = MagicMock()
+            prof_chain.select.return_value = prof_chain
+            prof_chain.eq.return_value = prof_chain
+            prof_chain.single.return_value = prof_chain
+            prof_chain.execute.return_value = MagicMock(data={
+                "id": "admin-user-target",
+                "username": "former_user",
+                "full_name": "Former User",
+                "avatar_url": None,
+                "avatar_kind": "icon",
+                "icon_id": None,
+                "role": "administrator",
+                "admin_since": "2026-04-10T10:00:00Z",
+                "created_at": "2026-01-01T00:00:00Z",
+            })
+
+            empty_chain = MagicMock()
+            empty_chain.select.return_value = empty_chain
+            empty_chain.eq.return_value = empty_chain
+            empty_chain.order.return_value = empty_chain
+            empty_chain.execute.return_value = MagicMock(data=[])
+
+            def table_router(table_name):
+                if table_name == "profiles":
+                    return prof_chain
+                return empty_chain
+
+            mock_sb.table.side_effect = table_router
+
+            res = client.get("/api/admin/users/admin-user-target")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["is_admin"] is True
+            assert data["admin_since"] == "2026-04-10T10:00:00Z"
+            assert data["warnings"] == []
+            assert data["warning_history"] == []
+        finally:
+            app.dependency_overrides.pop(require_admin, None)
+
+    # 12. Panel Event Details includes cancellation reason and participant admin status
+    @patch("app.services.admin_service.supabase")
+    def test_admin_event_details_includes_cancellation_reason_and_participant_admin_flag(self, mock_sb):
+        app.dependency_overrides[require_admin] = lambda: MockAdminUser()
+        try:
+            ev_chain = MagicMock()
+            ev_chain.select.return_value = ev_chain
+            ev_chain.eq.return_value = ev_chain
+            ev_chain.single.return_value = ev_chain
+            ev_chain.execute.return_value = MagicMock(data={
+                "id": "cancelled-ev-1",
+                "title": "Cancelled Event",
+                "start_datetime": "2026-11-01T10:00:00Z",
+                "status": "cancelled",
+                "cancellation_reason": "Organizer was made an administrator",
+                "created_by": "org-1",
+            })
+
+            org_chain = MagicMock()
+            org_chain.select.return_value = org_chain
+            org_chain.eq.return_value = org_chain
+            org_chain.single.return_value = org_chain
+            org_chain.execute.return_value = MagicMock(data={
+                "id": "org-1",
+                "username": "organizer_one",
+                "full_name": "Organizer One",
+                "avatar_url": None,
+                "avatar_kind": "icon",
+                "icon_id": None,
+            })
+
+            part_chain = MagicMock()
+            part_chain.select.return_value = part_chain
+            part_chain.eq.return_value = part_chain
+            part_chain.order.return_value = part_chain
+            part_chain.execute.return_value = MagicMock(data=[
+                {"id": 1, "user_id": "u-admin-part", "status": "registered", "created_at": "2026-10-01T00:00:00Z"}
+            ])
+
+            prof_chain = MagicMock()
+            prof_chain.select.return_value = prof_chain
+            prof_chain.in_.return_value = prof_chain
+            prof_chain.execute.return_value = MagicMock(data=[
+                {
+                    "id": "u-admin-part",
+                    "username": "now_admin",
+                    "full_name": "Now Admin",
+                    "avatar_url": None,
+                    "avatar_kind": "icon",
+                    "icon_id": None,
+                    "role": "administrator",
+                }
+            ])
+
+            chat_chain = MagicMock()
+            chat_chain.select.return_value = chat_chain
+            chat_chain.eq.return_value = chat_chain
+            chat_chain.order.return_value = chat_chain
+            chat_chain.execute.return_value = MagicMock(data=[])
+
+            def table_router(table_name):
+                if table_name == "events":
+                    return ev_chain
+                if table_name == "event_participants":
+                    return part_chain
+                if table_name == "event_chats":
+                    return chat_chain
+                if table_name == "profiles":
+                    # First profile query is organizer (.eq), second is participants (.in_)
+                    return org_chain if org_chain.execute.call_count == 0 else prof_chain
+                return MagicMock()
+
+            mock_sb.table.side_effect = table_router
+
+            res = client.get("/api/admin/events/cancelled-ev-1")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["is_cancelled"] is True
+            assert data["cancellation_reason"] == "Organizer was made an administrator"
+            assert len(data["participants"]) == 1
+            assert data["participants"][0]["is_admin"] is True
+        finally:
+            app.dependency_overrides.pop(require_admin, None)
+
+    # 13. Refuse administrator accounts every user function
+    @patch("app.core.dependencies.supabase")
+    def test_administrator_refused_user_functions(self, mock_sb):
+        admin_user = MagicMock()
+        admin_user.id = "admin-user-id"
+        mock_sb.auth.get_user.return_value = MagicMock(user=admin_user)
+
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data={
+            "id": "admin-user-id",
+            "username": "admin_account",
+            "full_name": "Admin Account",
+            "role": "administrator"
+        })
+        mock_sb.table.return_value = profile_chain
+
+        admin_token = _create_jwt({"sub": "admin-user-id", "aal": "aal2"})
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        # User endpoints that must be refused to administrators
+        endpoints = [
+            ("POST", "/api/events/", {"title": "Test Event", "category": "party"}),
+            ("GET", "/api/profile/me", None),
+            ("PUT", "/api/profile/me", {"bio": "Hello"}),
+            ("POST", "/api/friends/requests", {"receiver_id": "00000000-0000-0000-0000-000000000002"}),
+            ("POST", "/api/blocks", {"user_id": "00000000-0000-0000-0000-000000000002"}),
+            ("POST", "/api/favorites/save-events/some-event-id", None),
+        ]
+
+        for method, url, body in endpoints:
+            if method == "POST":
+                res = client.post(url, json=body or {}, headers=headers)
+            elif method == "PUT":
+                res = client.put(url, json=body or {}, headers=headers)
+            elif method == "GET":
+                res = client.get(url, headers=headers)
+
+            assert res.status_code == 403, f"{method} {url} should refuse administrator account with 403"
+            assert "Administrator accounts cannot perform user actions." in res.json()["detail"]

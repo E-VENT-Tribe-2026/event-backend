@@ -209,3 +209,32 @@ class TestOnboardingGateRouteLevel:
             assert "Profile setup required" in response.json()["detail"]
         finally:
             app.dependency_overrides.pop(get_current_user, None)
+
+    def test_friend_request_endpoint_blocked_for_incomplete_account(self):
+        """
+        An authenticated user without a username must receive 403 from
+        friend request endpoints (#180).
+        """
+        app.dependency_overrides[get_current_user] = lambda: MockUser()
+
+        incomplete_chain = MagicMock()
+        incomplete_chain.table.return_value = incomplete_chain
+        incomplete_chain.select.return_value = incomplete_chain
+        incomplete_chain.eq.return_value = incomplete_chain
+        incomplete_chain.single.return_value = incomplete_chain
+        incomplete_chain.execute.return_value = MagicMock(
+            data={"username": None, "full_name": None}
+        )
+
+        try:
+            with patch("app.core.dependencies.supabase", incomplete_chain):
+                response = client.post(
+                    "/api/friends/requests",
+                    json={"receiver_id": "22222222-2222-4222-8222-222222222222"},
+                    headers={"Authorization": "Bearer token"},
+                )
+
+            assert response.status_code == 403
+            assert "Profile setup required" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)

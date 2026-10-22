@@ -216,9 +216,11 @@ class TestBuildPublicProfile:
     def mocks(self):
         with patch("app.services.public_profile_service.get_public_profile") as profile, \
              patch("app.services.public_profile_service.get_profile_events") as events, \
-             patch("app.services.public_profile_service.get_friendship_state") as state:
-            events.return_value = EMPTY_EVENTS
+             patch("app.services.public_profile_service.get_friendship_state") as state, \
+             patch("app.services.public_profile_service.get_user_friends_summary_page") as friends:
+            events.return_value = {"organized": {"upcoming": [], "past": []}, "joined": {"upcoming": [], "past": []}}
             state.return_value = {"status": "none", "request_id": None}
+            friends.return_value = {"page": 1, "limit": 10, "has_more": False, "data": []}
             yield profile, events, state
 
     @pytest.mark.parametrize("fstatus", ["none", "self", "friends", "request_sent", "request_received"])
@@ -284,7 +286,7 @@ class TestBuildPublicProfile:
 
 def _search_chain(data):
     chain = MagicMock()
-    for name in ("select", "eq", "neq", "ilike", "order", "range"):
+    for name in ("select", "in_", "eq", "neq", "is_", "ilike", "order", "range"):
         getattr(chain, name).return_value = chain
     chain.execute.return_value = MagicMock(data=data)
     return chain
@@ -329,14 +331,14 @@ class TestSearchProfiles:
         assert SEARCH_COLUMNS == SEARCH_COLS
 
     @patch("app.services.profile_service.supabase")
-    def test_searches_only_public_profiles(self, mock_sb):
+    def test_searches_only_public_and_friends_only_profiles(self, mock_sb):
         chain = _search_chain([])
         mock_sb.table.return_value = chain
 
         from app.services.profile_service import search_profiles
         search_profiles("Bob", 1, 10, "viewer-1")
 
-        chain.eq.assert_any_call("visibility", "public")
+        chain.in_.assert_any_call("visibility", ["public", "friends_only"])
 
     @patch("app.services.profile_service.supabase")
     def test_search_passes_mixed_case_query_unchanged(self, mock_sb):
@@ -366,7 +368,7 @@ class TestSearchProfiles:
         from app.services.profile_service import search_profiles
         search_profiles("alice", 1, 10, "viewer-1")
 
-        chain.neq.assert_called_once_with("id", "viewer-1")
+        chain.neq.assert_any_call("id", "viewer-1")
 
     @patch("app.services.profile_service.supabase")
     def test_search_strips_asterisk_wildcards(self, mock_sb):

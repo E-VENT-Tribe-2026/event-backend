@@ -1,7 +1,8 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
-from app.core.dependencies import get_current_user, get_current_onboarded_user
+from app.core.dependencies import get_current_onboarded_user
+from app.core.user_rate_limit import user_rate_limit, FRIEND_REQUEST_LIMIT
 from app.services.friendship_service import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -32,9 +33,15 @@ router = APIRouter()
 MAX_PAGE = 10000
 MAX_REQUEST_ID = 9223372036854775807  # postgres bigint upper bound
 
+limit_friend_requests = user_rate_limit(
+    "friend_requests",
+    FRIEND_REQUEST_LIMIT,
+    user_dep=get_current_onboarded_user,
+)
+
 
 @router.post("/requests", status_code=201, response_model=FriendRequestItem)
-def send_request(body: SendFriendRequest, user=Depends(get_current_user)):
+def send_request(body: SendFriendRequest, user=Depends(limit_friend_requests)):
     return send_friend_request(user.id, str(body.receiver_id))
 
 
@@ -42,7 +49,7 @@ def send_request(body: SendFriendRequest, user=Depends(get_current_user)):
 def incoming_requests(
     page: int = Query(1, ge=1, le=MAX_PAGE),
     limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return get_incoming_requests(user.id, page, limit)
 
@@ -51,28 +58,28 @@ def incoming_requests(
 def sent_requests(
     page: int = Query(1, ge=1, le=MAX_PAGE),
     limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return get_sent_requests(user.id, page, limit)
 
 
 @router.get("/requests/count", response_model=FriendRequestCount)
-def incoming_requests_count(user=Depends(get_current_user)):
+def incoming_requests_count(user=Depends(get_current_onboarded_user)):
     return count_incoming_requests(user.id)
 
 
 @router.post("/requests/{request_id}/accept", response_model=FriendItem)
-def accept_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=Depends(get_current_user)):
+def accept_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=Depends(limit_friend_requests)):
     return accept_friend_request(request_id, user.id)
 
 
 @router.post("/requests/{request_id}/decline", response_model=MessageResponse)
-def decline_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=Depends(get_current_user)):
+def decline_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=Depends(limit_friend_requests)):
     return decline_friend_request(request_id, user.id)
 
 
 @router.delete("/requests/{request_id}", response_model=MessageResponse)
-def cancel_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=Depends(get_current_user)):
+def cancel_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=Depends(limit_friend_requests)):
     return cancel_friend_request(request_id, user.id)
 
 
@@ -80,13 +87,13 @@ def cancel_request(request_id: int = Path(..., ge=1, le=MAX_REQUEST_ID), user=De
 def list_friends(
     page: int = Query(1, ge=1, le=MAX_PAGE),
     limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
-    user=Depends(get_current_user),
+    user=Depends(get_current_onboarded_user),
 ):
     return get_friends(user.id, page, limit)
 
 
 @router.delete("/{friend_id}", response_model=MessageResponse)
-def unfriend(friend_id: UUID, user=Depends(get_current_user)):
+def unfriend(friend_id: UUID, user=Depends(get_current_onboarded_user)):
     return remove_friend(user.id, str(friend_id))
 
 

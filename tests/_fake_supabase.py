@@ -113,6 +113,9 @@ class FakeQuery:
     def gte(self, col, val):
         self.preds.append(lambda r: str(_get(r, col) or "") >= str(val))
         return self
+    def lt(self, col, val):
+        self.preds.append(lambda r: str(_get(r, col) or "") < str(val))
+        return self
 
     def gt(self, col, val):
         self.preds.append(lambda r: str(_get(r, col) or "") > str(val))
@@ -125,6 +128,9 @@ class FakeQuery:
         class _Not:
             def in_(_self, col, vals):
                 outer.preds.append(lambda r: not any(_same(_get(r, col), v) for v in vals))
+                return outer
+            def is_(_self, col, val):
+                outer.preds.append(lambda r: _get(r, col) is not None)
                 return outer
 
         return _Not()
@@ -207,7 +213,7 @@ class FakeSupabase:
     def add(self, name, row):
         self._seq += 1
         row.setdefault("created_at", f"2026-01-01T00:00:{self._seq:02d}+00:00")
-        if name in ("friend_requests", "friendships", "notifications"):
+        if name in ("friend_requests", "friendships", "notifications", "warnings", "logs"):
             row.setdefault("id", self._seq)
         self.tables.setdefault(name, []).append(row)
         return row

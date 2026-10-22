@@ -9,6 +9,8 @@ def create_notification(
     type_: str,
     message: str,
     related_user_id: str | None = None,
+    actor_id: str | None = None,
+    friend_request_id: int | None = None,
 ):
     payload = {
         "user_id": user_id,
@@ -20,6 +22,10 @@ def create_notification(
     }
     if related_user_id is not None:
         payload["related_user_id"] = related_user_id
+    if actor_id is not None:
+        payload["actor_id"] = actor_id
+    if friend_request_id is not None:
+        payload["friend_request_id"] = friend_request_id
 
     dedupe = supabase.table("notifications") \
         .select("created_at") \
@@ -79,6 +85,16 @@ def get_notifications(user_id: str, page: int = 1, limit: int = 10):
         rid = row.get("related_user_id")
         row["related_user"] = summaries.get(rid) if rid else None
 
+    # Warnings (#191): mark them, and say whether each one has been acknowledged.
+    from app.services.warning_service import warning_states, WARNING_NOTIFICATION_TYPE
+    states = warning_states([r.get("warning_id") for r in rows if r.get("type") == WARNING_NOTIFICATION_TYPE])
+    for row in rows:
+        is_warning = row.get("type") == WARNING_NOTIFICATION_TYPE
+        state = states.get(row.get("warning_id")) if is_warning else None
+        row["is_warning"] = is_warning
+        row["warning_acknowledged"] = bool(state and state.get("acknowledged_at")) if is_warning else None
+        row["warning_withdrawn"] = bool(state and state.get("withdrawn_at")) if is_warning else None
+
     return {
         "page": page,
         "limit": limit,
@@ -93,6 +109,15 @@ def delete_notifications_for(user_id: str, type_: str, related_user_id: str):
         .eq("user_id", user_id) \
         .eq("type", type_) \
         .eq("related_user_id", related_user_id) \
+        .execute()
+    return response.data or []
+
+
+def delete_notifications_for_request(friend_request_id: int):
+    """Delete the notifications linked to one friend request."""
+    response = supabase.table("notifications") \
+        .delete() \
+        .eq("friend_request_id", friend_request_id) \
         .execute()
     return response.data or []
 

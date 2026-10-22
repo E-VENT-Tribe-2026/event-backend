@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from app.api.router import api_router
 from app.core.limiter import limiter
+from app.core.user_rate_limit import UserRateLimitExceeded, user_rate_limit_handler
 from app.core.jwt_middleware import JWTMiddleware
 from app.db.database import engine, Base
 from dotenv import load_dotenv
@@ -58,6 +59,7 @@ app = FastAPI(
 # Rate limiter state and error handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(UserRateLimitExceeded, user_rate_limit_handler)
 
 
 LIVE_GET_PREFIXES = (
