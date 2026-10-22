@@ -203,6 +203,18 @@ class TestFriendErrorPassthrough:
         assert response.status_code == 409
         assert response.json() == {"detail": detail}
 
+    @pytest.mark.parametrize("method,path,target,kwargs", [
+        ("post", "/requests", "send_friend_request", {"json": {"receiver_id": OTHER}}),
+        ("post", "/requests/7/accept", "accept_friend_request", {}),
+        ("post", "/requests/7/decline", "decline_friend_request", {}),
+        ("delete", "/requests/7", "cancel_friend_request", {}),
+    ])
+    def test_notification_failure_fails_endpoint(self, method, path, target, kwargs):
+        with patch(f"app.api.v1.friendship_routes.{target}", side_effect=RuntimeError("notification failed")):
+            safe_client = TestClient(app, raise_server_exceptions=False)
+            response = getattr(safe_client, method)(f"/api/friends{path}", headers=HEADERS, **kwargs)
+            assert response.status_code == 500
+
 
 class TestAuthRequired:
     @pytest.mark.parametrize("method,path,target,kwargs", [
