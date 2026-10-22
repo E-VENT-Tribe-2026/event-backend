@@ -183,6 +183,12 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     except Exception:
         logger.error("Failed to create friend request notification on send: request_id=%s initiator=%s receiver=%s",
                      row["id"], sender_id, receiver_id, exc_info=True)
+        try:
+            supabase.table("friend_requests").delete().eq("id", row["id"]).execute()
+        except Exception:
+            logger.error("Failed to rollback friend request insert after notification failure: request_id=%s",
+                         row["id"], exc_info=True)
+        raise
 
     return {
         "request_id": row["id"],
@@ -207,7 +213,7 @@ def _claim_request(request_id: int, role_column: str, user_id: str) -> dict:
 
 
 def _cleanup_request_notification(row: dict, context: str):
-    """Remove the receiver's friend-request notification, never failing the caller."""
+    """Remove the receiver's friend-request notification."""
     try:
         deleted = delete_notifications_for_request(row["id"])
         if not deleted:
@@ -216,6 +222,7 @@ def _cleanup_request_notification(row: dict, context: str):
     except Exception:
         logger.error("Failed to clean up friend request notification on %s: request_id=%s initiator=%s receiver=%s",
                      context, row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
+        raise
 
 
 def _restore_request(row: dict):
@@ -229,7 +236,7 @@ def _restore_request(row: dict):
             "created_at": row["created_at"],
         }).execute()
     except Exception:
-        logger.error("Failed to restore friend request on accept: request_id=%s initiator=%s receiver=%s",
+        logger.error("Failed to restore friend request: request_id=%s initiator=%s receiver=%s",
                      row["id"], row["initiator_id"], row["receiver_id"], exc_info=True)
 
 
@@ -346,7 +353,11 @@ def cancel_friend_request(request_id: int, user_id: str) -> dict:
         raise friend_error(403, "not_request_sender", "Only the sender can cancel this friend request.")
 
     _claim_request(request_id, "initiator_id", user_id)
-    _cleanup_request_notification(row, "cancel")
+    try:
+        _cleanup_request_notification(row, "cancel")
+    except Exception:
+        _restore_request(row)
+        raise
     return {"message": "Friend request cancelled"}
 
 
@@ -366,18 +377,34 @@ def accept_friend_request(request_id: int, user_id: str) -> dict:
     # missing (undeployed migration / schema cache) or cannot return its row type.
     friendship = _accept_atomically(request_id, user_id, row)
 
-    _cleanup_request_notification(row, "accept")
-
-    if friendship["created"]:
-        try:
+    notification_created = False
+    try:
+        if friendship["created"]:
             create_notification(
                 initiator, None, FRIEND_REQUEST_ACCEPTED,
                 f"{get_username(receiver)} accepted your friend request",
                 related_user_id=receiver,
             )
-        except Exception:
-            logger.error("Failed to create friend accepted notification on accept: request_id=%s initiator=%s receiver=%s",
-                         request_id, initiator, receiver, exc_info=True)
+            notification_created = True
+
+        _cleanup_request_notification(row, "accept")
+    except Exception:
+        logger.error("Failed notification operation on accept: request_id=%s initiator=%s receiver=%s",
+                     request_id, initiator, receiver, exc_info=True)
+        if notification_created:
+            try:
+                delete_notifications_for(initiator, FRIEND_REQUEST_ACCEPTED, receiver)
+            except Exception:
+                logger.error("Failed to delete acceptance notification during rollback on accept: initiator=%s receiver=%s",
+                             initiator, receiver, exc_info=True)
+        if friendship["created"]:
+            try:
+                supabase.table("friendships").delete().or_(_pair_filter(initiator, receiver, "user_id", "friend_id")).execute()
+            except Exception:
+                logger.error("Failed to delete friendship during rollback on accept: initiator=%s receiver=%s",
+                             initiator, receiver, exc_info=True)
+        _restore_request(row)
+        raise
 
     return {
         "friend_since": friendship["friend_since"],
@@ -393,7 +420,11 @@ def decline_friend_request(request_id: int, user_id: str) -> dict:
                            "Only the recipient can accept or decline this friend request.")
 
     _claim_request(request_id, "receiver_id", user_id)
-    _cleanup_request_notification(row, "decline")
+    try:
+        _cleanup_request_notification(row, "decline")
+    except Exception:
+        _restore_request(row)
+        raise
     return {"message": "Friend request declined"}
 
 
