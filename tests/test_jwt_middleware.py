@@ -192,15 +192,14 @@ class TestJWTMiddlewareEnforced:
         assert res.status_code == 401
         assert res.json()["detail"] == "Authentication required."
 
-    @patch("app.api.v1.participant_routes.get_participants_for_viewer", return_value=[])
-    @patch("app.core.dependencies.supabase")
-    def test_trailing_slash_keeps_authorization(self, mock_sb, _):
-        mock_sb.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="u1"))
-        res = TestClient(app, follow_redirects=False).get(
-            f"{self.PROTECTED}/",
-            headers={"Authorization": f"Bearer {_es256()}"},
-        )
-        assert res.status_code == 200
+    @patch("app.api.v1.event_routes.attach_organizers")
+    @patch("app.api.v1.event_routes.list_events", return_value={"page": 1, "limit": 10, "data": []})
+    def test_public_event_list_does_not_redirect_loop(self, _list, _org):
+        client = TestClient(app, follow_redirects=False)
+        slashed = client.get("/api/events/")
+        bare = client.get("/api/events")
+        assert slashed.status_code == 200
+        assert bare.status_code == 200
 
     def test_jwks_unavailable_returns_503(self, _isolated):
         _isolated.side_effect = Exception("network down")

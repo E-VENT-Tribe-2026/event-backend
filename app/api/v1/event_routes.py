@@ -66,6 +66,7 @@ def get_all_my_events(user=Depends(get_current_onboarded_user)):
         )
 
 
+@router.get("")
 @router.get("/")
 def get_events(
     page: int = Query(1),
@@ -88,6 +89,7 @@ def get_events(
     return result
 
 
+@router.post("")
 @router.post("/")
 def create_new_event(
     data: EventCreateRequest,

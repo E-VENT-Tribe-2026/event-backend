@@ -156,17 +156,9 @@ class JWTMiddleware(BaseHTTPMiddleware):
         if os.getenv("TESTING") == "true":
             return await call_next(request)
 
-        # FastAPI 307-redirects /api/admin/users/ → /api/admin/users and
-        # browsers drop Authorization on that CORS redirect.
-        path = request.scope.get("path") or request.url.path
-        normalized = _strip_trailing_slash(path)
-        if normalized != path:
-            request.scope["path"] = normalized
-            if "raw_path" in request.scope:
-                request.scope["raw_path"] = normalized.encode("ascii")
-
         # Always allow OPTIONS (CORS preflight) and public paths
-        if request.method == "OPTIONS" or _is_public(normalized):
+        path = request.scope.get("path") or request.url.path
+        if request.method == "OPTIONS" or _is_public(path) or _is_public(_strip_trailing_slash(path)):
             return await call_next(request)
 
         token = _bearer_token(request.headers.get("Authorization", ""))

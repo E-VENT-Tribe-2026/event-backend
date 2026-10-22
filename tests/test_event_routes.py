@@ -61,9 +61,11 @@ class TestEventListLive:
             "app.api.v1.event_routes.list_events",
             return_value={"page": 1, "limit": 10, "data": []},
         ), patch("app.api.v1.event_routes.attach_organizers"):
-            response = client.get("/api/events/")
-        assert response.status_code == 200
-        assert response.headers.get("Cache-Control") == "no-store"
+            slashed = client.get("/api/events/")
+            bare = client.get("/api/events")
+        assert slashed.status_code == 200
+        assert bare.status_code == 200
+        assert slashed.headers.get("Cache-Control") == "no-store"
 
     def test_event_date_query_is_passed_as_date(self):
         with patch(
