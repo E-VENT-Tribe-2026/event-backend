@@ -74,11 +74,14 @@ def get_events(
     upcoming: bool = False,
     search: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     date: str | None = None,
+    event_date: str | None = Query(None),
     city: str | None = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH),
     user=Depends(get_optional_user),
 ):
     viewer_id = user.id if user is not None else None
-    result = list_events(page, limit, category, upcoming, search, date, city, viewer_id=viewer_id)
+    result = list_events(
+        page, limit, category, upcoming, search, date or event_date, city, viewer_id=viewer_id
+    )
     attach_organizers(result.get("data") or [])
     if user is not None:
         attach_friends_attending_count(result.get("data") or [], user.id)

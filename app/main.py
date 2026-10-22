@@ -60,6 +60,14 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+LIVE_GET_PREFIXES = (
+    "/api/events",
+    "/api/recommendations",
+    "/api/notifications",
+    "/api/friends",
+)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
@@ -70,6 +78,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        if request.method == "GET" and any(request.url.path.startswith(p) for p in LIVE_GET_PREFIXES):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
 

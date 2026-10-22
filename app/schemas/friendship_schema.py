@@ -2,13 +2,15 @@ from datetime import datetime
 from typing import List, Union
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from app.schemas.profile_schema import UserSummary
 
 
 class SendFriendRequest(BaseModel):
-    receiver_id: UUID
+    receiver_id: UUID = Field(
+        validation_alias=AliasChoices("receiver_id", "user_id", "receiverId", "userId")
+    )
 
 
 class FriendRequestItem(BaseModel):
