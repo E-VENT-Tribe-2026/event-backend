@@ -1,6 +1,11 @@
+import logging
 from datetime import datetime, timezone
 from app.db.supabase_client import supabase
 from app.services.profile_service import get_user_summaries
+
+logger = logging.getLogger(__name__)
+
+_OPTIONAL_NOTIFICATION_COLUMNS = ("actor_id", "friend_request_id", "related_user_id")
 
 
 def create_notification(
@@ -63,8 +68,16 @@ def create_notification(
             now = datetime.now(timezone.utc)
             if (now - last_time).total_seconds() < 10:
                 return
-            
-    supabase.table("notifications").insert(payload).execute()
+
+    try:
+        supabase.table("notifications").insert(payload).execute()
+        return
+    except Exception as e:
+        stripped = {k: v for k, v in payload.items() if k not in _OPTIONAL_NOTIFICATION_COLUMNS}
+        if stripped == payload:
+            raise
+        logger.warning("Notification insert failed with extra columns, retrying without them: %s", e)
+        supabase.table("notifications").insert(stripped).execute()
 
 
 def get_notifications(user_id: str, page: int = 1, limit: int = 10):

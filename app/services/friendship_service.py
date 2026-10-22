@@ -165,7 +165,10 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     except ValueError:
         raise friend_error(404, "user_not_found", "User not found.")
 
-    profile = supabase.table("profiles").select("id, role").eq("id", receiver_id).limit(1).execute()
+    try:
+        profile = supabase.table("profiles").select("id, role").eq("id", receiver_id).limit(1).execute()
+    except Exception:
+        profile = supabase.table("profiles").select("id").eq("id", receiver_id).limit(1).execute()
     if not profile.data:
         raise friend_error(404, "user_not_found", "User not found.")
     if (profile.data[0].get("role") or "").lower() in ("administrator", "admin"):
@@ -195,7 +198,7 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
                 "Friend request insert failed: initiator=%s receiver=%s error=%s",
                 sender_id, receiver_id, e, exc_info=True,
             )
-            raise
+            raise friend_error(500, "send_failed", "Could not send friend request.")
         # Lost a race with a concurrent request or accept: map it to the matching 409.
         _raise_for_state(get_friendship_state(sender_id, receiver_id))
         raise friend_error(
@@ -218,14 +221,11 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
             friend_request_id=row["id"],
         )
     except Exception:
+        # The request row is the source of truth. A notification schema mismatch
+        # (missing actor_id / friend_request_id, type check, etc.) must not
+        # delete a request the user already sent.
         logger.error("Failed to create friend request notification on send: request_id=%s initiator=%s receiver=%s",
                      row["id"], sender_id, receiver_id, exc_info=True)
-        try:
-            supabase.table("friend_requests").delete().eq("id", row["id"]).execute()
-        except Exception:
-            logger.error("Failed to rollback friend request insert after notification failure: request_id=%s",
-                         row["id"], exc_info=True)
-        raise
 
     return {
         "request_id": row["id"],

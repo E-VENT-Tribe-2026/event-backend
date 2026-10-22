@@ -105,17 +105,20 @@ def require_regular_user(user=Depends(get_current_user)):
 
 def get_current_onboarded_user(user=Depends(require_regular_user)):
     """Extends require_regular_user by requiring a completed profile (username + full_name)."""
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("username, full_name, role")
-            .eq("id", user.id)
-            .single()
-            .execute()
-        )
-        data = result.data or {}
-    except Exception:
-        data = {}
+    data = {}
+    for columns in ("username, full_name, role", "username, full_name"):
+        try:
+            result = (
+                supabase.table("profiles")
+                .select(columns)
+                .eq("id", user.id)
+                .single()
+                .execute()
+            )
+            data = result.data or {}
+            break
+        except Exception:
+            data = {}
 
     role = data.get("role")
     if role in ("administrator", "admin"):
