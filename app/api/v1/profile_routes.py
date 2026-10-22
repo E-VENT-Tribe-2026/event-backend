@@ -2,7 +2,7 @@ import time
 import mimetypes
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
-from app.core.dependencies import get_current_user, get_current_onboarded_user, require_regular_user
+from app.core.dependencies import get_current_user, get_current_onboarded_user, get_own_profile_user, require_regular_user
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.core.user_rate_limit import user_rate_limit, SEARCH_LIMIT
 from app.db.supabase_client import supabase
@@ -66,8 +66,8 @@ def put_username(
 
 
 @router.get("/me")
-def read_my_profile(user=Depends(get_current_onboarded_user)):
-    """Returns the full profile of the authenticated user."""
+def read_my_profile(user=Depends(get_own_profile_user)):
+    """Returns the full profile of the authenticated account, including administrators after MFA."""
     return get_profile(user.id)
 
 

@@ -188,7 +188,19 @@ class TestJWTMiddlewareEnforced:
         mock_get_participants.assert_not_called()
 
     def test_missing_token_is_rejected(self):
-        assert self._get().status_code == 401
+        res = self._get()
+        assert res.status_code == 401
+        assert res.json()["detail"] == "Authentication required."
+
+    @patch("app.api.v1.participant_routes.get_participants_for_viewer", return_value=[])
+    @patch("app.core.dependencies.supabase")
+    def test_trailing_slash_keeps_authorization(self, mock_sb, _):
+        mock_sb.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="u1"))
+        res = TestClient(app, follow_redirects=False).get(
+            f"{self.PROTECTED}/",
+            headers={"Authorization": f"Bearer {_es256()}"},
+        )
+        assert res.status_code == 200
 
     def test_jwks_unavailable_returns_503(self, _isolated):
         _isolated.side_effect = Exception("network down")

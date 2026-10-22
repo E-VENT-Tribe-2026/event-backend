@@ -1,6 +1,6 @@
 import logging
-from typing import Literal, Optional
-from fastapi import APIRouter, Depends, Query, Path
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from app.core.dependencies import require_admin
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.admin_schema import (
@@ -71,13 +71,28 @@ def get_counts(admin=Depends(require_admin)):
     return get_admin_counts()
 
 
+_USER_LIST_FILTERS = ("administrators", "suspended", "with_warnings")
+
+
+def _user_list_filter(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized or normalized in ("all", "none", "undefined", "null"):
+        return None
+    if normalized not in _USER_LIST_FILTERS:
+        raise HTTPException(status_code=422, detail="Invalid user list filter.")
+    return normalized
+
+
 @router.get("/users", response_model=AdminUserListResponse)
+@router.get("/users/", response_model=AdminUserListResponse, include_in_schema=False)
 def get_users(
-    search: Optional[str] = Query(None,max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by username"),
+    search: Optional[str] = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by username"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
-    filter: Optional[Literal["administrators", "suspended", "with_warnings"]] = Query(
-        None, description="One user list counter, combined with the search"),
+    filter: Optional[str] = Query(
+        None, max_length=64, description="One user list counter, combined with the search"),
     admin=Depends(require_admin),
 ):
     """
@@ -86,7 +101,7 @@ def get_users(
     Supports case-insensitive search by username across all accounts, together with one counter filter.
     Each user entry has its number of warnings that count and its status; an administrator's entry the role only.
     """
-    return list_admin_users(search=search, page=page, limit=limit, filter_by=filter)
+    return list_admin_users(search=search, page=page, limit=limit, filter_by=_user_list_filter(filter))
 
 
 # Must stay ABOVE /users/{user_id}, or FastAPI reads "counters" as a user id.

@@ -737,7 +737,6 @@ class TestAdminPanel:
         # User endpoints that must be refused to administrators
         endpoints = [
             ("POST", "/api/events/", {"title": "Test Event", "category": "party"}),
-            ("GET", "/api/profile/me", None),
             ("PUT", "/api/profile/me", {"bio": "Hello"}),
             ("POST", "/api/friends/requests", {"receiver_id": "00000000-0000-0000-0000-000000000002"}),
             ("POST", "/api/blocks", {"user_id": "00000000-0000-0000-0000-000000000002"}),
@@ -754,3 +753,68 @@ class TestAdminPanel:
 
             assert res.status_code == 403, f"{method} {url} should refuse administrator account with 403"
             assert "Administrator accounts cannot perform user actions." in res.json()["detail"]
+
+    @patch("app.api.v1.profile_routes.get_profile")
+    @patch("app.core.dependencies.supabase")
+    def test_administrator_can_read_own_profile_after_mfa(self, mock_sb, mock_get):
+        admin_user = MagicMock()
+        admin_user.id = "admin-user-id"
+        mock_sb.auth.get_user.return_value = MagicMock(user=admin_user)
+
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data={
+            "id": "admin-user-id",
+            "username": "admin_account",
+            "full_name": "Admin Account",
+            "role": "administrator",
+        })
+        mock_sb.table.return_value = profile_chain
+        mock_get.return_value = {
+            "id": "admin-user-id",
+            "username": "admin_account",
+            "role": "administrator",
+        }
+
+        admin_token = _create_jwt({"sub": "admin-user-id", "aal": "aal2"})
+        res = client.get("/api/profile/me", headers={"Authorization": f"Bearer {admin_token}"})
+        assert res.status_code == 200
+        assert res.json()["role"] == "administrator"
+        mock_get.assert_called_once_with("admin-user-id")
+
+    @patch("app.services.warning_service.supabase")
+    @patch("app.services.admin_service.supabase")
+    @patch("app.core.dependencies.supabase")
+    def test_administrator_can_fetch_users_after_mfa(self, mock_dep_sb, mock_admin_sb, _mock_warn_sb):
+        admin_user = MagicMock()
+        admin_user.id = "admin-user-id"
+        mock_dep_sb.auth.get_user.return_value = MagicMock(user=admin_user)
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data={"role": "administrator"})
+        mock_dep_sb.table.return_value = profile_chain
+
+        users_chain = MagicMock()
+        users_chain.select.return_value = users_chain
+        users_chain.order.return_value = users_chain
+        users_chain.range.return_value = users_chain
+        users_chain.execute.return_value = MagicMock(count=1, data=[
+            {"id": "u1", "username": "alice", "full_name": "Alice", "role": "user", "created_at": "2026-01-01"},
+        ])
+        mock_admin_sb.table.return_value = users_chain
+
+        admin_token = _create_jwt({"sub": "admin-user-id", "aal": "aal2"})
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        res = client.get("/api/admin/users", headers=headers)
+        assert res.status_code == 200
+        assert res.json()["items"][0]["username"] == "alice"
+
+        empty_filter = client.get("/api/admin/users?filter=", headers=headers)
+        assert empty_filter.status_code == 200
+
+        trailing = client.get("/api/admin/users/", headers=headers)
+        assert trailing.status_code == 200

@@ -38,6 +38,7 @@ class LoginRequest(BaseModel):
 
 class AuthResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     role: Optional[str] = None
     is_admin: bool = False
@@ -76,7 +77,12 @@ class MFAVerifyRequest(BaseModel):
 
 class MFAVerifyResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None
     token_type: str = "bearer"
+    role: Optional[str] = "administrator"
+    is_admin: bool = True
+    has_mfa_linked: bool = True
     is_verified: bool = True
     message: str = "Sign-in successfully verified."
 

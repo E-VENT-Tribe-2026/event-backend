@@ -59,6 +59,22 @@ def _is_public(path: str) -> bool:
     return False
 
 
+def _strip_trailing_slash(path: str) -> str:
+    if path != "/" and path.endswith("/"):
+        return path.rstrip("/")
+    return path
+
+
+def _bearer_token(auth_header: str) -> str | None:
+    if not auth_header:
+        return None
+    scheme, sep, remainder = auth_header.strip().partition(" ")
+    if not sep or scheme.lower() != "bearer":
+        return None
+    token = remainder.strip()
+    return token or None
+
+
 def _supabase_auth_url() -> str:
     return f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1"
 
@@ -140,18 +156,25 @@ class JWTMiddleware(BaseHTTPMiddleware):
         if os.getenv("TESTING") == "true":
             return await call_next(request)
 
+        # FastAPI 307-redirects /api/admin/users/ → /api/admin/users and
+        # browsers drop Authorization on that CORS redirect.
+        path = request.scope.get("path") or request.url.path
+        normalized = _strip_trailing_slash(path)
+        if normalized != path:
+            request.scope["path"] = normalized
+            if "raw_path" in request.scope:
+                request.scope["raw_path"] = normalized.encode("ascii")
+
         # Always allow OPTIONS (CORS preflight) and public paths
-        if request.method == "OPTIONS" or _is_public(request.url.path):
+        if request.method == "OPTIONS" or _is_public(normalized):
             return await call_next(request)
 
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        token = _bearer_token(request.headers.get("Authorization", ""))
+        if not token:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required."},
             )
-
-        token = auth_header.removeprefix("Bearer ").strip()
 
         try:
             await verify_jwt(token)

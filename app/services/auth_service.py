@@ -156,10 +156,11 @@ def login_user(email: str, password: str):
             from app.core.dependencies import suspension_error
             raise suspension_error(profile_data.get("suspension_reason"))
 
-        is_admin = (role == "administrator")
+        is_admin = (str(role or "").lower() in ("administrator", "admin"))
         if not is_admin:
             return {
                 "access_token": response.session.access_token,
+                "refresh_token": _session_refresh_token(response.session),
                 "token_type": "bearer",
                 "role": role,
                 "is_admin": False,
@@ -185,6 +186,7 @@ def login_user(email: str, password: str):
 
         result = {
             "access_token": response.session.access_token,
+            "refresh_token": _session_refresh_token(response.session),
             "token_type": "bearer",
             "role": "administrator",
             "is_admin": True,
@@ -436,12 +438,43 @@ def get_user_factors(user_id: str) -> list:
         return []
 
 
+def _session_refresh_token(session) -> str | None:
+    token = getattr(session, "refresh_token", None)
+    return token if isinstance(token, str) and token else None
+
+
+def _extract_gotrue_session(payload) -> dict:
+    """GoTrue may return tokens at the top level or nested under session/data."""
+    if not isinstance(payload, dict):
+        return {}
+    candidates = [payload]
+    for key in ("session", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+            inner = nested.get("session")
+            if isinstance(inner, dict):
+                candidates.append(inner)
+    for item in candidates:
+        if isinstance(item.get("access_token"), str) and item["access_token"]:
+            return item
+    return {}
+
+
+def _mfa_headers(access_token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+
+
+def _is_admin_role(role) -> bool:
+    return str(role or "").lower() in ("administrator", "admin")
+
+
 def get_mfa_status(user_id: str, access_token: str) -> dict:
     """Return whether the account is an administrator, has linked MFA, and if current sign-in is verified."""
-    import base64
-    import json
-
-    # 1. Fetch user role
     role = None
     try:
         profile_res = (
@@ -455,7 +488,7 @@ def get_mfa_status(user_id: str, access_token: str) -> dict:
     except Exception as e:
         logger.error(f"Failed to fetch profile role for user {user_id}: {e}")
 
-    is_admin = (role == "administrator")
+    is_admin = _is_admin_role(role)
     if not is_admin:
         return {
             "role": role,
@@ -465,16 +498,8 @@ def get_mfa_status(user_id: str, access_token: str) -> dict:
             "factor_id": None,
         }
 
-    # 2. Check token AAL level for current sign-in verification
-    is_verified = False
-    try:
-        parts = access_token.split(".")
-        if len(parts) == 3:
-            padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-            claims = json.loads(base64.urlsafe_b64decode(padded))
-            is_verified = (claims.get("aal") == "aal2")
-    except Exception as e:
-        logger.warning(f"Could not parse token claims for AAL check: {e}")
+    from app.core.dependencies import token_is_mfa_verified
+    is_verified = token_is_mfa_verified(access_token)
 
     # 3. Check enrolled factors
     has_mfa_linked = False
@@ -512,7 +537,7 @@ def enroll_mfa(user_id: str, email: str, access_token: str) -> dict:
         .execute()
     )
     role = (profile_res.data or {}).get("role")
-    if role != "administrator":
+    if not _is_admin_role(role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only administrator accounts can link an authenticator app."
@@ -580,13 +605,14 @@ def verify_mfa(user_id: str, access_token: str, code: str, factor_id: str | None
         .execute()
     )
     role = (profile_res.data or {}).get("role")
-    if role != "administrator":
+    if not _is_admin_role(role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only administrator accounts can verify authentication codes."
         )
 
     import httpx
+    from app.core.dependencies import token_is_mfa_verified
 
     # 2. If factor_id is not provided, look up the user's active/latest factor
     target_factor_id = factor_id
@@ -608,16 +634,12 @@ def verify_mfa(user_id: str, access_token: str, code: str, factor_id: str | None
             detail="No authenticator factor found for account. Please link an authenticator app first."
         )
 
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "apikey": settings.SUPABASE_ANON_KEY,
-        "Content-Type": "application/json",
-    }
+    headers = _mfa_headers(access_token)
+    totp_code = code.strip()
 
-    # 3. Create a challenge
-    challenge_url = f"{settings.SUPABASE_URL}/auth/v1/factors/{target_factor_id}/challenge"
-    try:
-        challenge_resp = httpx.post(challenge_url, headers=headers, json={}, timeout=10.0)
+    def _challenge_and_verify(auth_headers: dict) -> dict:
+        challenge_url = f"{settings.SUPABASE_URL}/auth/v1/factors/{target_factor_id}/challenge"
+        challenge_resp = httpx.post(challenge_url, headers=auth_headers, json={}, timeout=10.0)
         if challenge_resp.status_code not in (200, 201):
             logger.error(f"Supabase MFA challenge returned {challenge_resp.status_code}: {challenge_resp.text}")
             raise HTTPException(
@@ -625,37 +647,45 @@ def verify_mfa(user_id: str, access_token: str, code: str, factor_id: str | None
                 detail="Failed to create verification challenge. Please try again."
             )
         challenge_id = challenge_resp.json().get("id")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error creating MFA challenge: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create verification challenge.")
-
-    # 4. Verify code against the challenge
-    verify_url = f"{settings.SUPABASE_URL}/auth/v1/factors/{target_factor_id}/verify"
-    verify_body = {
-        "challenge_id": challenge_id,
-        "code": code.strip(),
-    }
-    try:
-        verify_resp = httpx.post(verify_url, headers=headers, json=verify_body, timeout=10.0)
+        verify_url = f"{settings.SUPABASE_URL}/auth/v1/factors/{target_factor_id}/verify"
+        verify_resp = httpx.post(
+            verify_url,
+            headers=auth_headers,
+            json={"challenge_id": challenge_id, "code": totp_code},
+            timeout=10.0,
+        )
         if verify_resp.status_code not in (200, 201):
             logger.warning(f"Supabase MFA verify failed with status {verify_resp.status_code}: {verify_resp.text}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid verification code. Please check your authenticator app and try again."
             )
-
-        data = verify_resp.json()
-        new_access_token = data.get("access_token")
-        if not new_access_token:
+        session = _extract_gotrue_session(verify_resp.json())
+        if not session.get("access_token"):
             raise HTTPException(status_code=500, detail="MFA verification succeeded but no access token returned.")
+        return session
 
+    try:
+        session = _challenge_and_verify(headers)
+        access = session["access_token"]
+        if not token_is_mfa_verified(access):
+            try:
+                session = _challenge_and_verify(_mfa_headers(access))
+                access = session["access_token"]
+            except HTTPException:
+                logger.warning("MFA code accepted but session was not elevated to aal2")
+
+        verified = token_is_mfa_verified(access)
         return {
-            "access_token": new_access_token,
-            "token_type": "bearer",
-            "is_verified": True,
-            "message": "Sign-in successfully verified.",
+            "access_token": access,
+            "refresh_token": session.get("refresh_token") if isinstance(session.get("refresh_token"), str) else None,
+            "expires_in": session.get("expires_in"),
+            "token_type": session.get("token_type") or "bearer",
+            "role": "administrator",
+            "is_admin": True,
+            "has_mfa_linked": True,
+            "is_verified": verified,
+            "message": "Sign-in successfully verified." if verified else "Authenticator linked. Enter the next code from your app to finish signing in.",
         }
     except HTTPException:
         raise

@@ -136,18 +136,31 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20,
             return _empty_page(page, limit)
         query = query.in_("id", warned_ids)
 
-    res = (
-        query
-        .order("created_at", desc=True)
-        .range(offset, offset + limit - 1)
-        .execute()
-    )
+    try:
+        res = (
+            query
+            .order("created_at", desc=True)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"list_admin_users failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not load users.",
+        )
 
     total = res.count if res.count is not None else len(res.data or [])
     total_pages = max(1, math.ceil(total / limit))
 
-    rows = res.data or []
-    counts = counted_warning_counts([r.get("id") for r in rows if not _is_admin_role(r.get("role"))])
+    rows = [row for row in (res.data or []) if row.get("id")]
+    try:
+        counts = counted_warning_counts(
+            [r.get("id") for r in rows if not _is_admin_role(r.get("role"))]
+        )
+    except Exception as e:
+        logger.warning(f"list_admin_users warning counts unavailable: {e}")
+        counts = {}
 
     items = []
     for row in rows:
@@ -155,8 +168,11 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20,
         full_name = row.get("full_name")
         role = row.get("role") or "user"
         is_admin = _is_admin_role(role)
+        created_at = row.get("created_at")
+        if created_at is not None and not isinstance(created_at, str):
+            created_at = str(created_at)
         items.append({
-            "id": row.get("id"),
+            "id": str(row.get("id")),
             "username": username,
             "full_name": full_name,
             "display_name": username or full_name,
@@ -164,8 +180,8 @@ def list_admin_users(search: str | None = None, page: int = 1, limit: int = 20,
             "avatar_kind": row.get("avatar_kind") or "icon",
             "icon_id": row.get("icon_id"),
             "role": role,
-            "is_admin": (role == "administrator"),
-            "created_at": row.get("created_at"),
+            "is_admin": is_admin,
+            "created_at": created_at,
             # #191: an administrator's entry shows the role only.
             "warning_count": None if is_admin else counts.get(row.get("id"), 0),
             "status": None if is_admin else _account_status(row),
