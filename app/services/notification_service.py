@@ -8,6 +8,19 @@ logger = logging.getLogger(__name__)
 _OPTIONAL_NOTIFICATION_COLUMNS = ("actor_id", "friend_request_id", "related_user_id")
 
 
+def _is_missing_column_error(exc: Exception, col: str) -> bool:
+    code = str(getattr(exc, "code", "") or "")
+    text = str(exc)
+    msg = str(getattr(exc, "message", "") or "")
+    is_missing_code = (
+        code in {"42703", "PGRST204"}
+        or "42703" in text
+        or "PGRST204" in text
+        or "schema cache" in text.lower()
+    )
+    return is_missing_code and (col in text or col in msg)
+
+
 def create_notification(
     user_id: str,
     event_id: str | None,
@@ -17,6 +30,9 @@ def create_notification(
     actor_id: str | None = None,
     friend_request_id: int | None = None,
 ):
+    if actor_id is None and related_user_id is not None:
+        actor_id = related_user_id
+
     payload = {
         "user_id": user_id,
         "event_id": event_id,
@@ -32,20 +48,29 @@ def create_notification(
     if friend_request_id is not None:
         payload["friend_request_id"] = friend_request_id
 
-    dedupe = supabase.table("notifications") \
-        .select("created_at") \
-        .eq("user_id", user_id)
-    if event_id is None:
-        dedupe = dedupe.is_("event_id", "null")
-    else:
-        dedupe = dedupe.eq("event_id", event_id)
-    dedupe = dedupe.eq("type", type_).eq("message", message)
-    if related_user_id is not None:
-        dedupe = dedupe.eq("related_user_id", related_user_id)
-    existing = dedupe \
-        .order("created_at", desc=True) \
-        .limit(1) \
-        .execute()
+    def _query_dedupe(use_related_col: bool = True):
+        dedupe = supabase.table("notifications") \
+            .select("created_at") \
+            .eq("user_id", user_id)
+        if event_id is None:
+            dedupe = dedupe.is_("event_id", "null")
+        else:
+            dedupe = dedupe.eq("event_id", event_id)
+        dedupe = dedupe.eq("type", type_).eq("message", message)
+        if related_user_id is not None:
+            if use_related_col:
+                dedupe = dedupe.eq("related_user_id", related_user_id)
+            elif actor_id is not None:
+                dedupe = dedupe.eq("actor_id", actor_id)
+        return dedupe.order("created_at", desc=True).limit(1).execute()
+
+    try:
+        existing = _query_dedupe(use_related_col=True)
+    except Exception as e:
+        if _is_missing_column_error(e, "related_user_id"):
+            existing = _query_dedupe(use_related_col=False)
+        else:
+            raise
 
     if existing.data:
         created_at = existing.data[0].get("created_at")
@@ -68,11 +93,17 @@ def create_notification(
             now = datetime.now(timezone.utc)
             if (now - last_time).total_seconds() < 10:
                 return
-
     try:
         supabase.table("notifications").insert(payload).execute()
         return
     except Exception as e:
+        if _is_missing_column_error(e, "related_user_id") and "related_user_id" in payload:
+            fallback_payload = {k: v for k, v in payload.items() if k != "related_user_id"}
+            try:
+                supabase.table("notifications").insert(fallback_payload).execute()
+                return
+            except Exception:
+                pass
         stripped = {k: v for k, v in payload.items() if k not in _OPTIONAL_NOTIFICATION_COLUMNS}
         if stripped == payload:
             raise
@@ -92,11 +123,17 @@ def get_notifications(user_id: str, page: int = 1, limit: int = 10):
         .execute()
 
     rows = response.data or []
-    related_ids = [r["related_user_id"] for r in rows if r.get("related_user_id")]
+    related_ids = [
+        (r.get("related_user_id") or r.get("actor_id"))
+        for r in rows
+        if (r.get("related_user_id") or r.get("actor_id"))
+    ]
     summaries = get_user_summaries(related_ids) if related_ids else {}
     for row in rows:
-        rid = row.get("related_user_id")
+        rid = row.get("related_user_id") or row.get("actor_id")
         row["related_user"] = summaries.get(rid) if rid else None
+        if row.get("related_user_id") is None and rid:
+            row["related_user_id"] = rid
 
     # Warnings (#191): mark them, and say whether each one has been acknowledged.
     from app.services.warning_service import warning_states, WARNING_NOTIFICATION_TYPE
@@ -117,13 +154,24 @@ def get_notifications(user_id: str, page: int = 1, limit: int = 10):
 
 def delete_notifications_for(user_id: str, type_: str, related_user_id: str):
     """Delete a user's notifications of one type that relate to a given other user."""
-    response = supabase.table("notifications") \
-        .delete() \
-        .eq("user_id", user_id) \
-        .eq("type", type_) \
-        .eq("related_user_id", related_user_id) \
-        .execute()
-    return response.data or []
+    try:
+        response = supabase.table("notifications") \
+            .delete() \
+            .eq("user_id", user_id) \
+            .eq("type", type_) \
+            .eq("related_user_id", related_user_id) \
+            .execute()
+        return response.data or []
+    except Exception as e:
+        if _is_missing_column_error(e, "related_user_id"):
+            response = supabase.table("notifications") \
+                .delete() \
+                .eq("user_id", user_id) \
+                .eq("type", type_) \
+                .eq("actor_id", related_user_id) \
+                .execute()
+            return response.data or []
+        raise
 
 
 def delete_notifications_for_request(friend_request_id: int):

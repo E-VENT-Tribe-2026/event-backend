@@ -235,7 +235,7 @@ def require_admin(
             detail="Forbidden: Could not verify administrator role."
         )
 
-    if not is_admin_role(role):
+    if role != "administrator":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Administrative privileges required."

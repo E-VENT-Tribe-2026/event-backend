@@ -371,3 +371,50 @@ class TestGetNotificationsRelatedUser:
         assert all(r["related_user"] is None for r in result["data"])
         assert result["page"] == 1
         assert result["limit"] == 10
+
+
+class TestMissingColumnFallback:
+    @patch("app.services.notification_service.supabase")
+    def test_create_notification_falls_back_when_related_user_id_missing(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.order.return_value = chain
+        chain.limit.return_value = chain
+
+        class FakeAPIError(Exception):
+            code = "PGRST204"
+            message = "Could not find the 'related_user_id' column of 'notifications' in the schema cache"
+
+        # First dedupe execute raises PGRST204, second dedupe execute succeeds with no duplicate
+        chain.execute.side_effect = [FakeAPIError(), MagicMock(data=[]), FakeAPIError(), MagicMock(data=[{"id": 1}])]
+        chain.insert.return_value = chain
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", None, "friend_request_accepted", "hi", related_user_id="u2")
+
+        # Fallback insert without related_user_id should be attempted
+        assert chain.insert.call_count == 2
+        payload2 = chain.insert.call_args_list[1][0][0]
+        assert "related_user_id" not in payload2
+        assert payload2["actor_id"] == "u2"
+
+    @patch("app.services.notification_service.supabase")
+    def test_delete_notifications_for_falls_back_to_actor_id(self, mock_sb):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.delete.return_value = chain
+        chain.eq.return_value = chain
+
+        class FakeAPIError(Exception):
+            code = "PGRST204"
+            message = "Could not find the 'related_user_id' column of 'notifications' in the schema cache"
+
+        chain.execute.side_effect = [FakeAPIError(), MagicMock(data=[{"id": 1}])]
+
+        from app.services.notification_service import delete_notifications_for
+        res = delete_notifications_for("u1", "friend_request_accepted", "u2")
+        assert res == [{"id": 1}]
+        assert chain.eq.call_args_list[-1] == call("actor_id", "u2")
+
