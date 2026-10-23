@@ -53,7 +53,11 @@ def list_audit_log(before: str | None = None, limit: int = 20) -> dict:
     query = supabase.table("logs").select("*")
     if before:
         query = query.lt("created_date", before)
-    res = query.order("created_date", desc=True).limit(limit + 1).execute()
+    try:
+        res = query.order("created_date", desc=True).limit(limit + 1).execute()
+    except Exception as e:
+        logger.error(f"list_audit_log failed: {e}")
+        return {"items": [], "has_more": False, "next_before": None}
 
     rows = res.data or []
     has_more = len(rows) > limit
@@ -68,7 +72,7 @@ def list_audit_log(before: str | None = None, limit: int = 20) -> dict:
         entity_id = r.get("entity_id")
         items.append({
             "id": str(r["id"]) if r.get("id") is not None else None,
-            "created_at": r.get("created_date"),
+            "created_at": str(r["created_date"]) if r.get("created_date") is not None else None,
             "action": r.get("type") or "",
             "administrator": people.get(r.get("created_by_id")),
             "target": {

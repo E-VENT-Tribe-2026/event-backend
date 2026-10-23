@@ -103,19 +103,60 @@ def require_regular_user(user=Depends(get_current_user)):
     return user
 
 
+def _profile_row(user_id: str, columns: str) -> dict:
+    result = (
+        supabase.table("profiles")
+        .select(columns)
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    return result.data or {}
+
+
+def is_admin_role(role) -> bool:
+    return str(role or "").lower() in ("administrator", "admin")
+
+
+def get_own_profile_user(user=Depends(get_current_user)):
+    """Admins may read their own profile after MFA; regular users still need onboarding."""
+    data = {}
+    for columns in ("username, full_name, role", "username, full_name"):
+        try:
+            data = _profile_row(user.id, columns)
+            break
+        except Exception:
+            data = {}
+
+    if is_admin_role(data.get("role")):
+        return user
+
+    username = (data.get("username") or "").strip()
+    full_name = (data.get("full_name") or "").strip()
+    if not username or not full_name:
+        raise HTTPException(
+            status_code=403,
+            detail="Profile setup required: please choose a username and enter your full name.",
+        )
+    return user
+
+
 def get_current_onboarded_user(user=Depends(require_regular_user)):
     """Extends require_regular_user by requiring a completed profile (username + full_name)."""
-    try:
-        result = (
-            supabase.table("profiles")
-            .select("username, full_name, role")
-            .eq("id", user.id)
-            .single()
-            .execute()
-        )
-        data = result.data or {}
-    except Exception:
-        data = {}
+    data = {}
+    for columns in ("username, full_name, role", "username, full_name"):
+        try:
+            result = (
+                supabase.table("profiles")
+                .select(columns)
+                .eq("id", user.id)
+                .single()
+                .execute()
+            )
+            data = result.data or {}
+            break
+        except Exception:
+            data = {}
 
     role = data.get("role")
     if role in ("administrator", "admin"):
@@ -134,6 +175,34 @@ def get_current_onboarded_user(user=Depends(require_regular_user)):
         )
 
     return user
+
+
+def jwt_claims(token: str) -> dict:
+    """Read claims from a JWT without verifying the signature (middleware already did)."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("Malformed token")
+    padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(padded))
+    if not isinstance(claims, dict):
+        raise ValueError("Malformed token")
+    return claims
+
+
+def token_is_mfa_verified(token: str) -> bool:
+    """True when this sign-in has completed TOTP MFA (aal2, or amr includes totp)."""
+    try:
+        claims = jwt_claims(token)
+    except Exception:
+        return False
+    if str(claims.get("aal") or "").lower() == "aal2":
+        return True
+    amr = claims.get("amr") or []
+    for entry in amr:
+        method = entry.get("method") if isinstance(entry, dict) else entry
+        if str(method or "").lower() in {"totp", "mfa"}:
+            return True
+    return False
 
 
 def require_admin(
@@ -172,20 +241,16 @@ def require_admin(
             detail="Forbidden: Administrative privileges required."
         )
 
-    # 2. Check token AAL level for verified sign-in
+    # 2. Check token AAL / AMR for a verified authenticator sign-in
     try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            raise ValueError("Malformed token")
-        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(padded))
+        jwt_claims(token)
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or malformed token."
         )
 
-    if claims.get("aal") != "aal2":
+    if not token_is_mfa_verified(token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Administrator sign-in verification required. Please complete MFA."

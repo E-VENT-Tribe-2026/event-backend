@@ -230,6 +230,28 @@ class TestCreateNotificationRelatedUser:
         assert payload["friend_request_id"] == 42
 
     @patch("app.services.notification_service.supabase")
+    def test_retries_without_optional_columns_when_insert_fails(self, mock_sb):
+        chain = _dedupe_chain()
+        mock_sb.table.return_value = chain
+        chain.execute.side_effect = [
+            MagicMock(data=[]),
+            RuntimeError("column actor_id does not exist"),
+            MagicMock(data=[{"id": 1}]),
+        ]
+
+        from app.services.notification_service import create_notification
+        create_notification("u1", None, "friend_request_received", "hi",
+                            related_user_id="u9", actor_id="u9", friend_request_id=42)
+
+        assert chain.insert.call_count == 2
+        first = chain.insert.call_args_list[0][0][0]
+        second = chain.insert.call_args_list[1][0][0]
+        assert first["actor_id"] == "u9"
+        assert "actor_id" not in second
+        assert "friend_request_id" not in second
+        assert "related_user_id" not in second
+
+    @patch("app.services.notification_service.supabase")
     def test_event_notification_has_no_actor_or_request_keys(self, mock_sb):
         chain = _dedupe_chain()
         mock_sb.table.return_value = chain

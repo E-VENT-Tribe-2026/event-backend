@@ -59,6 +59,22 @@ def _is_public(path: str) -> bool:
     return False
 
 
+def _strip_trailing_slash(path: str) -> str:
+    if path != "/" and path.endswith("/"):
+        return path.rstrip("/")
+    return path
+
+
+def _bearer_token(auth_header: str) -> str | None:
+    if not auth_header:
+        return None
+    scheme, sep, remainder = auth_header.strip().partition(" ")
+    if not sep or scheme.lower() != "bearer":
+        return None
+    token = remainder.strip()
+    return token or None
+
+
 def _supabase_auth_url() -> str:
     return f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1"
 
@@ -141,17 +157,16 @@ class JWTMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Always allow OPTIONS (CORS preflight) and public paths
-        if request.method == "OPTIONS" or _is_public(request.url.path):
+        path = request.scope.get("path") or request.url.path
+        if request.method == "OPTIONS" or _is_public(path) or _is_public(_strip_trailing_slash(path)):
             return await call_next(request)
 
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        token = _bearer_token(request.headers.get("Authorization", ""))
+        if not token:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required."},
             )
-
-        token = auth_header.removeprefix("Bearer ").strip()
 
         try:
             await verify_jwt(token)

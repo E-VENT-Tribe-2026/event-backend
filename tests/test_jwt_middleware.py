@@ -188,7 +188,18 @@ class TestJWTMiddlewareEnforced:
         mock_get_participants.assert_not_called()
 
     def test_missing_token_is_rejected(self):
-        assert self._get().status_code == 401
+        res = self._get()
+        assert res.status_code == 401
+        assert res.json()["detail"] == "Authentication required."
+
+    @patch("app.api.v1.event_routes.attach_organizers")
+    @patch("app.api.v1.event_routes.list_events", return_value={"page": 1, "limit": 10, "data": []})
+    def test_public_event_list_does_not_redirect_loop(self, _list, _org):
+        client = TestClient(app, follow_redirects=False)
+        slashed = client.get("/api/events/")
+        bare = client.get("/api/events")
+        assert slashed.status_code == 200
+        assert bare.status_code == 200
 
     def test_jwks_unavailable_returns_503(self, _isolated):
         _isolated.side_effect = Exception("network down")

@@ -43,6 +43,24 @@ class TestFriendRequestRoutes:
         assert response.json()["user"]["username"] == "jane_doe"
         mock_send.assert_called_once_with("u1", OTHER)
 
+    @patch("app.api.v1.friendship_routes.send_friend_request")
+    def test_post_send_request_accepts_user_id(self, mock_send):
+        payload = {"request_id": 7, "created_at": "2026-01-01T10:00:00+00:00",
+                   "user": JANE}
+        mock_send.return_value = payload
+        response = client.post("/api/friends/requests", json={"user_id": OTHER}, headers=HEADERS)
+        assert response.status_code == 201
+        mock_send.assert_called_once_with("u1", OTHER)
+
+    @patch("app.api.v1.friendship_routes.send_friend_request")
+    def test_post_send_request_accepts_camel_case(self, mock_send):
+        payload = {"request_id": 7, "created_at": "2026-01-01T10:00:00+00:00",
+                   "user": JANE}
+        mock_send.return_value = payload
+        response = client.post("/api/friends/requests", json={"receiverId": OTHER}, headers=HEADERS)
+        assert response.status_code == 201
+        mock_send.assert_called_once_with("u1", OTHER)
+
     def test_post_send_request_without_body_returns_422(self):
         response = client.post("/api/friends/requests", headers=HEADERS)
         assert response.status_code == 422

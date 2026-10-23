@@ -276,6 +276,54 @@ class TestMFAAuthentication:
             data = response.json()
             assert data["is_verified"] is True
             assert data["access_token"] == upgraded_token
+            assert data["is_admin"] is True
+            assert data["role"] == "administrator"
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("httpx.post")
+    @patch("app.services.auth_service.supabase")
+    def test_mfa_verify_reads_nested_session_and_refresh_token(self, mock_sb, mock_http_post):
+        class MockAdmin:
+            id = "admin-1"
+            email = "admin@example.com"
+
+        app.dependency_overrides[get_current_user] = lambda: MockAdmin()
+        try:
+            profile_chain = MagicMock()
+            profile_chain.select.return_value = profile_chain
+            profile_chain.eq.return_value = profile_chain
+            profile_chain.single.return_value = profile_chain
+            profile_chain.execute.return_value = MagicMock(data={"role": "administrator"})
+            mock_sb.table.return_value = profile_chain
+
+            challenge_resp = MagicMock()
+            challenge_resp.status_code = 200
+            challenge_resp.json.return_value = {"id": "challenge-1"}
+
+            upgraded_token = _create_jwt({"sub": "admin-1", "aal": "aal2"})
+            verify_resp = MagicMock()
+            verify_resp.status_code = 200
+            verify_resp.json.return_value = {
+                "session": {
+                    "access_token": upgraded_token,
+                    "refresh_token": "refresh-aal2",
+                    "expires_in": 3600,
+                    "token_type": "bearer",
+                }
+            }
+            mock_http_post.side_effect = [challenge_resp, verify_resp]
+
+            response = client.post(
+                "/api/auth/mfa/verify",
+                json={"code": "654321", "factor_id": "factor-1"},
+                headers={"Authorization": "Bearer token"}
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["access_token"] == upgraded_token
+            assert data["refresh_token"] == "refresh-aal2"
+            assert data["is_verified"] is True
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
@@ -347,4 +395,25 @@ class TestMFAAuthentication:
         response = client.get("/api/admin/verify", headers={"Authorization": f"Bearer {aal2_token}"})
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
+        assert response.json()["admin_id"] == "admin-1"
+
+    @patch("app.core.dependencies.supabase")
+    def test_require_admin_accepts_totp_amr_without_aal_claim(self, mock_sb):
+        admin_user = MagicMock()
+        admin_user.id = "admin-1"
+        mock_sb.auth.get_user.return_value = MagicMock(user=admin_user)
+
+        profile_chain = MagicMock()
+        profile_chain.select.return_value = profile_chain
+        profile_chain.eq.return_value = profile_chain
+        profile_chain.single.return_value = profile_chain
+        profile_chain.execute.return_value = MagicMock(data={"role": "administrator"})
+        mock_sb.table.return_value = profile_chain
+
+        totp_token = _create_jwt({
+            "sub": "admin-1",
+            "amr": [{"method": "password"}, {"method": "totp"}],
+        })
+        response = client.get("/api/admin/verify", headers={"Authorization": f"Bearer {totp_token}"})
+        assert response.status_code == 200
         assert response.json()["admin_id"] == "admin-1"

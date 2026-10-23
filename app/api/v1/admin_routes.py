@@ -1,6 +1,6 @@
 import logging
-from typing import Literal, Optional
-from fastapi import APIRouter, Depends, Query, Path
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from app.core.dependencies import require_admin
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.admin_schema import (
@@ -39,7 +39,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _slash(path: str, methods: list[str], **kwargs):
+    """Register a trailing-slash twin so CORS does not drop the MFA token."""
+    def deco(fn):
+        slash_path = path if path.endswith("/") else f"{path}/"
+        router.add_api_route(
+            slash_path,
+            fn,
+            methods=methods,
+            include_in_schema=False,
+            **kwargs,
+        )
+        return fn
+    return deco
+
+
 @router.get("/verify")
+@_slash("/verify", ["GET"])
 def verify_admin_access(admin=Depends(require_admin)):
     """
     Administrative check endpoint:
@@ -54,6 +70,7 @@ def verify_admin_access(admin=Depends(require_admin)):
 
 
 @router.get("/account", response_model=AdminAccountResponse)
+@_slash("/account", ["GET"], response_model=AdminAccountResponse)
 def get_account(admin=Depends(require_admin)):
     """
     Returns the signed-in administrator's account details for the account screen:
@@ -63,6 +80,7 @@ def get_account(admin=Depends(require_admin)):
 
 
 @router.get("/counts", response_model=AdminCountsResponse)
+@_slash("/counts", ["GET"], response_model=AdminCountsResponse)
 def get_counts(admin=Depends(require_admin)):
     """
     Returns the total number of registered users and the total number of events,
@@ -71,13 +89,28 @@ def get_counts(admin=Depends(require_admin)):
     return get_admin_counts()
 
 
+_USER_LIST_FILTERS = ("administrators", "suspended", "with_warnings")
+
+
+def _user_list_filter(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized or normalized in ("all", "none", "undefined", "null"):
+        return None
+    if normalized not in _USER_LIST_FILTERS:
+        raise HTTPException(status_code=422, detail="Invalid user list filter.")
+    return normalized
+
+
 @router.get("/users", response_model=AdminUserListResponse)
+@router.get("/users/", response_model=AdminUserListResponse, include_in_schema=False)
 def get_users(
-    search: Optional[str] = Query(None,max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by username"),
+    search: Optional[str] = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by username"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
-    filter: Optional[Literal["administrators", "suspended", "with_warnings"]] = Query(
-        None, description="One user list counter, combined with the search"),
+    filter: Optional[str] = Query(
+        None, max_length=64, description="One user list counter, combined with the search"),
     admin=Depends(require_admin),
 ):
     """
@@ -86,17 +119,19 @@ def get_users(
     Supports case-insensitive search by username across all accounts, together with one counter filter.
     Each user entry has its number of warnings that count and its status; an administrator's entry the role only.
     """
-    return list_admin_users(search=search, page=page, limit=limit, filter_by=filter)
+    return list_admin_users(search=search, page=page, limit=limit, filter_by=_user_list_filter(filter))
 
 
 # Must stay ABOVE /users/{user_id}, or FastAPI reads "counters" as a user id.
 @router.get("/users/counters", response_model=AdminUserListCounters)
+@_slash("/users/counters", ["GET"], response_model=AdminUserListCounters)
 def get_users_counters(admin=Depends(require_admin)):
     """The user list counters: Administrators, Suspended and With warnings."""
     return get_user_list_counters()
 
 
 @router.get("/users/{user_id}", response_model=AdminUserDetailResponse)
+@_slash("/users/{user_id}", ["GET"], response_model=AdminUserDetailResponse)
 def get_user(
     user_id: str = Path(..., description="Target user identifier"),
     admin=Depends(require_admin),
@@ -110,6 +145,7 @@ def get_user(
 
 
 @router.post("/users/{user_id}/grant-admin", response_model=GrantAdminRoleResponse)
+@_slash("/users/{user_id}/grant-admin", ["POST"], response_model=GrantAdminRoleResponse)
 def grant_admin(
     user_id: str = Path(..., description="Target user identifier"),
     admin=Depends(require_admin),
@@ -122,9 +158,28 @@ def grant_admin(
     return grant_admin_role(target_user_id=user_id, admin_user_id=admin.id)
 
 
+_EVENT_LIST_FILTERS = ("all", "past", "upcoming", "cancelled")
+
+
+def _event_list_filter(*values: Optional[str]) -> str:
+    for value in values:
+        if value is None:
+            continue
+        normalized = value.strip().lower()
+        if not normalized or normalized in ("none", "undefined", "null"):
+            continue
+        if normalized not in _EVENT_LIST_FILTERS:
+            raise HTTPException(status_code=422, detail="Invalid event list filter.")
+        return normalized
+    return "all"
+
+
 @router.get("/events", response_model=AdminEventListResponse)
+@router.get("/events/", response_model=AdminEventListResponse, include_in_schema=False)
 def get_events(
-    status_filter: str = Query("all", description="Filter list: all, past, upcoming, cancelled"),
+    status_filter: Optional[str] = Query(None, description="Filter list: all, past, upcoming, cancelled"),
+    filter: Optional[str] = Query(None, description="Alias for status_filter"),
+    status: Optional[str] = Query(None, description="Alias for status_filter"),
     search: Optional[str] = Query(None, max_length=SEARCH_TEXT_MAX_LENGTH, description="Case-insensitive substring search by event title"),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
@@ -136,10 +191,16 @@ def get_events(
     and cancelled, never in past or upcoming.
     Supports case-insensitive search by title.
     """
-    return list_admin_events(status_filter=status_filter, search=search, page=page, limit=limit)
+    return list_admin_events(
+        status_filter=_event_list_filter(status_filter, filter, status),
+        search=search,
+        page=page,
+        limit=limit,
+    )
 
 
 @router.get("/events/{event_id}", response_model=AdminEventDetailResponse)
+@_slash("/events/{event_id}", ["GET"], response_model=AdminEventDetailResponse)
 def get_event(
     event_id: str = Path(..., description="Target event identifier"),
     admin=Depends(require_admin),
@@ -152,6 +213,7 @@ def get_event(
     return get_admin_event_details(event_id=event_id)
 
 @router.post("/users/{user_id}/warnings", response_model=WarningHistoryItem, status_code=201)
+@_slash("/users/{user_id}/warnings", ["POST"], response_model=WarningHistoryItem, status_code=201)
 def post_warning(
     body: GiveWarningRequest,
     user_id: str = Path(..., description="User to warn"),
@@ -163,6 +225,7 @@ def post_warning(
 
 
 @router.get("/users/{user_id}/warnings", response_model=WarningHistoryResponse)
+@_slash("/users/{user_id}/warnings", ["GET"], response_model=WarningHistoryResponse)
 def get_user_warnings(
     user_id: str = Path(..., description="Target user identifier"),
     admin=Depends(require_admin),
@@ -172,6 +235,7 @@ def get_user_warnings(
 
 
 @router.post("/warnings/{warning_id}/withdraw", response_model=WarningHistoryItem)
+@_slash("/warnings/{warning_id}/withdraw", ["POST"], response_model=WarningHistoryItem)
 def post_withdraw_warning(
     warning_id: int = Path(..., description="Warning to withdraw"),
     admin=Depends(require_admin),
@@ -181,6 +245,7 @@ def post_withdraw_warning(
 
 
 @router.get("/audit-log", response_model=AuditLogResponse)
+@_slash("/audit-log", ["GET"], response_model=AuditLogResponse)
 def get_audit_log(
     before: Optional[str] = Query(None, description="next_before of the previous page"),
     limit: int = Query(20, ge=1, le=100),
@@ -190,6 +255,7 @@ def get_audit_log(
     return list_audit_log(before=before, limit=limit)
 
 @router.post("/users/{user_id}/suspend", response_model=SuspensionResponse)
+@_slash("/users/{user_id}/suspend", ["POST"], response_model=SuspensionResponse)
 def post_suspend(
     body: SuspensionReasonRequest,
     user_id: str = Path(..., description="User account to suspend"),
@@ -204,6 +270,7 @@ def post_suspend(
 
 
 @router.post("/users/{user_id}/lift-suspension", response_model=SuspensionResponse)
+@_slash("/users/{user_id}/lift-suspension", ["POST"], response_model=SuspensionResponse)
 def post_lift_suspension(
     body: SuspensionReasonRequest,
     user_id: str = Path(..., description="Suspended user account"),

@@ -248,19 +248,49 @@ class TestSendFriendRequest:
         assert exc.value.detail["request_id"] == request_id
         m["create_notification"].assert_not_called()
 
-    def test_unique_violation_with_state_none_reraises_original(self):
+    def test_unique_violation_with_state_none_is_409(self):
         mock_sb, chains = make_table_router()
         chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
-        original = UniqueViolation("duplicate key")
-        chains["friend_requests"].execute.side_effect = [original]
+        chains["friend_requests"].execute.side_effect = [UniqueViolation("duplicate key")]
         with svc(mock_sb, state=True) as m:
             m["get_friendship_state"].return_value = {"status": "none", "request_id": None}
             from app.services.friendship_service import send_friend_request
-            with pytest.raises(UniqueViolation) as exc:
+            with pytest.raises(HTTPException) as exc:
                 send_friend_request(ME, OTHER)
-        assert exc.value is original
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "request_already_sent"
 
-    def test_notification_failure_fails_send_and_rolls_back(self):
+    def test_trigger_already_friends_message_is_409_without_23505(self):
+        mock_sb, chains = make_table_router()
+        chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
+
+        class TriggerError(Exception):
+            code = "P0001"
+            message = "already_friends"
+
+        chains["friend_requests"].execute.side_effect = [TriggerError("already_friends")]
+        with svc(mock_sb, state=True) as m:
+            m["get_friendship_state"].return_value = {"status": "none", "request_id": None}
+            from app.services.friendship_service import send_friend_request
+            with pytest.raises(HTTPException) as exc:
+                send_friend_request(ME, OTHER)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "already_friends"
+        m["create_notification"].assert_not_called()
+
+    def test_other_insert_error_is_send_failed_500(self):
+        mock_sb, chains = make_table_router()
+        chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
+        chains["friend_requests"].execute.side_effect = [RuntimeError("lock_friend_pair")]
+        with svc(mock_sb, state=True) as m:
+            m["get_friendship_state"].return_value = {"status": "none", "request_id": None}
+            from app.services.friendship_service import send_friend_request
+            with pytest.raises(HTTPException) as exc:
+                send_friend_request(ME, OTHER)
+        assert exc.value.status_code == 500
+        assert exc.value.detail["code"] == "send_failed"
+
+    def test_notification_failure_does_not_fail_send(self):
         mock_sb, chains = make_table_router()
         chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
         chains["friend_requests"].execute.return_value = MagicMock(data=[_req(7)])
@@ -268,10 +298,9 @@ class TestSendFriendRequest:
             m["get_friendship_state"].return_value = {"status": "none", "request_id": None}
             m["create_notification"].side_effect = RuntimeError("boom")
             from app.services.friendship_service import send_friend_request
-            with pytest.raises(RuntimeError, match="boom"):
-                send_friend_request(ME, OTHER)
-        chains["friend_requests"].delete.assert_called_once()
-        chains["friend_requests"].eq.assert_any_call("id", 7)
+            result = send_friend_request(ME, OTHER)
+        assert result["request_id"] == 7
+        chains["friend_requests"].delete.assert_not_called()
 
 
 # ────────────────────────────────────────────────────────────────────────────

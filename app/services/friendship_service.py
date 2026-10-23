@@ -39,8 +39,30 @@ def _norm(value) -> str:
     return str(value).strip().lower()
 
 
+def _error_blob(exc: Exception) -> str:
+    """Flatten PostgREST/APIError fields so SQLSTATE and RAISE messages are searchable."""
+    parts = [str(exc), str(getattr(exc, "code", "") or ""), str(getattr(exc, "message", "") or "")]
+    for attr in ("details", "hint", "diag"):
+        parts.append(str(getattr(exc, attr, "") or ""))
+    if exc.args:
+        parts.append(str(exc.args))
+    return " ".join(parts).lower()
+
+
 def _is_unique_violation(exc: Exception) -> bool:
-    return getattr(exc, "code", None) == "23505" or "23505" in str(exc)
+    blob = _error_blob(exc)
+    code = str(getattr(exc, "code", "") or "")
+    return (
+        code == "23505"
+        or "23505" in blob
+        or "unique_violation" in blob
+        or "duplicate key" in blob
+        or "already_friends" in blob
+    )
+
+
+def _is_already_friends_db_error(exc: Exception) -> bool:
+    return "already_friends" in _error_blob(exc)
 
 
 def _uuid(value) -> str:
@@ -137,7 +159,16 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
     if _norm(sender_id) == _norm(receiver_id):
         raise friend_error(400, "cannot_friend_self", "You cannot send a friend request to yourself.")
 
-    profile = supabase.table("profiles").select("id, role").eq("id", receiver_id).limit(1).execute()
+    try:
+        sender_id = _uuid(sender_id)
+        receiver_id = _uuid(receiver_id)
+    except ValueError:
+        raise friend_error(404, "user_not_found", "User not found.")
+
+    try:
+        profile = supabase.table("profiles").select("id, role").eq("id", receiver_id).limit(1).execute()
+    except Exception:
+        profile = supabase.table("profiles").select("id").eq("id", receiver_id).limit(1).execute()
     if not profile.data:
         raise friend_error(404, "user_not_found", "User not found.")
     if (profile.data[0].get("role") or "").lower() in ("administrator", "admin"):
@@ -158,13 +189,22 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
             .execute()
         )
     except Exception as e:
+        # The insert trigger raises 23505 / already_friends when the pair is already
+        # friends. PostgREST may omit SQLSTATE 23505, so also match the RAISE message.
+        if _is_already_friends_db_error(e):
+            raise friend_error(409, "already_friends", "You are already friends with this user.")
         if not _is_unique_violation(e):
-            raise
-        # Lost a race with a concurrent request or accept (the database rejects a
-        # pending request between friends with 23505): map it to the matching 409
-        # if the state now shows a conflict, otherwise re-raise the original error.
+            logger.error(
+                "Friend request insert failed: initiator=%s receiver=%s error=%s",
+                sender_id, receiver_id, e, exc_info=True,
+            )
+            raise friend_error(500, "send_failed", "Could not send friend request.")
+        # Lost a race with a concurrent request or accept: map it to the matching 409.
         _raise_for_state(get_friendship_state(sender_id, receiver_id))
-        raise
+        raise friend_error(
+            409, "request_already_sent",
+            "You have already sent this user a friend request.",
+        )
 
     if not resp.data:
         logger.error("Friend request insert returned no row: initiator=%s receiver=%s",
@@ -181,14 +221,11 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
             friend_request_id=row["id"],
         )
     except Exception:
+        # The request row is the source of truth. A notification schema mismatch
+        # (missing actor_id / friend_request_id, type check, etc.) must not
+        # delete a request the user already sent.
         logger.error("Failed to create friend request notification on send: request_id=%s initiator=%s receiver=%s",
                      row["id"], sender_id, receiver_id, exc_info=True)
-        try:
-            supabase.table("friend_requests").delete().eq("id", row["id"]).execute()
-        except Exception:
-            logger.error("Failed to rollback friend request insert after notification failure: request_id=%s",
-                         row["id"], exc_info=True)
-        raise
 
     return {
         "request_id": row["id"],

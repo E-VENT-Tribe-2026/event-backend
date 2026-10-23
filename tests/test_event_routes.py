@@ -53,3 +53,25 @@ class TestMyEventsRoute:
             assert error_records[0].exc_info is not None
         finally:
             app.dependency_overrides.pop(get_current_onboarded_user, None)
+
+
+class TestEventListLive:
+    def test_list_is_not_http_cached(self):
+        with patch(
+            "app.api.v1.event_routes.list_events",
+            return_value={"page": 1, "limit": 10, "data": []},
+        ), patch("app.api.v1.event_routes.attach_organizers"):
+            slashed = client.get("/api/events/")
+            bare = client.get("/api/events")
+        assert slashed.status_code == 200
+        assert bare.status_code == 200
+        assert slashed.headers.get("Cache-Control") == "no-store"
+
+    def test_event_date_query_is_passed_as_date(self):
+        with patch(
+            "app.api.v1.event_routes.list_events",
+            return_value={"page": 1, "limit": 10, "data": []},
+        ) as mock_list, patch("app.api.v1.event_routes.attach_organizers"):
+            response = client.get("/api/events/?event_date=2026-10-20")
+        assert response.status_code == 200
+        assert mock_list.call_args.args[5] == "2026-10-20"
