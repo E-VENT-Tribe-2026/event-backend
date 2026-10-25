@@ -90,6 +90,7 @@ class TestRegisterRequestValidator:
         payload = {
             "email": "a@b.com",
             "password": "secret",
+            "invite_code": "ABCD-2345",
             "username": None,
             "full_name": None,
             "dob": date(1990, 1, 1),

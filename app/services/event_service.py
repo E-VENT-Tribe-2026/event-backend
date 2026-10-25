@@ -92,6 +92,9 @@ def present_event(event: dict | None) -> dict | None:
             banner = event.get("banner")
         event["banner_url"] = banner
         event["banner"] = banner
+    # Check-in secrets are organizer-only; never leave them on a shared event payload.
+    event.pop("check_in_code", None)
+    event.pop("check_in_qr_content", None)
     return event
 
 
@@ -141,6 +144,10 @@ def create_event(user_id: str, data: dict):
     # 3. Cleanup
     data.pop('id', None)
     data.pop("event_embedding", None)
+    data.pop("check_in_code", None)
+    data.pop("check_in_qr_content", None)
+    from app.services.check_in_service import assign_event_check_in_secrets
+    assign_event_check_in_secrets(data)
     data["status"] = "active"
 
     # 4. Generate embedding
@@ -314,6 +321,8 @@ def update_event(user_id: str, event_id: str, update_data: dict):
 
     # Disallow reviving or directly modifying event status via update
     update_data.pop("status", None)
+    update_data.pop("check_in_code", None)
+    update_data.pop("check_in_qr_content", None)
 
     # Regenerate embedding if needed
     if "title" in update_data or "description" in update_data or "category" in update_data:

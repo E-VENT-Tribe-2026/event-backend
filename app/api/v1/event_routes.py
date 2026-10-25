@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, BackgroundTasks, File, UploadFile
 from app.core.dependencies import get_current_user, get_current_onboarded_user, get_optional_user
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
+from app.schemas.check_in_schema import CheckInRequest, CheckInResponse, CheckInCodeResponse, CheckInListResponse
 from fastapi import HTTPException
 from app.db.supabase_client import supabase
 from app.services import event_service
@@ -22,6 +23,11 @@ from app.services.event_service import (
 from app.services.invitation_service import get_invitation_summary
 from app.services.block_visibility import is_event_hidden
 from app.services.participant_service import attach_friends_attending_count
+from app.services.check_in_service import (
+    check_in as record_event_check_in,
+    get_event_check_in_code,
+    list_event_check_ins,
+)
 
 
 router = APIRouter()
@@ -160,6 +166,37 @@ def update_existing_event(
     )
     background_tasks.add_task(_update_event_side_effects, user.id, event_id, original_event, updated_event)
     return result
+
+
+@router.get("/{event_id}/check-in-code", response_model=CheckInCodeResponse)
+def read_event_check_in_code(event_id: str, user=Depends(get_current_onboarded_user)):
+    """Organizer only: the six-digit door code and the QR content (the same code)."""
+    return get_event_check_in_code(event_id, user.id)
+
+
+@router.post("/{event_id}/check-in", response_model=CheckInResponse)
+def post_event_check_in(
+    event_id: str,
+    data: CheckInRequest,
+    user=Depends(get_current_onboarded_user),
+):
+    """Participant check-in with the typed six-digit code or the scanned QR content."""
+    return record_event_check_in(
+        event_id,
+        user.id,
+        code=data.code,
+        qr_content=data.qr_content,
+    )
+
+
+@router.get(
+    "/{event_id}/check-ins",
+    response_model=CheckInListResponse,
+    response_model_exclude_none=True,
+)
+def read_event_check_ins(event_id: str, user=Depends(get_current_onboarded_user)):
+    """Who has checked in. Times are included only for the organizer."""
+    return list_event_check_ins(event_id, user.id)
 
 
 @router.get("/{event_id}")
