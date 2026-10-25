@@ -310,3 +310,39 @@ def build_leave_event_email(event: dict) -> tuple[str, str, str]:
     """
 
     return subject, plain, html
+
+
+def build_registration_invite_email(code: str, expires_at) -> tuple[str, str, str]:
+    """Email an invitation code so the recipient can open the signup page."""
+    signup_url = f"{settings.FRONTEND_URL.rstrip('/')}/register"
+    expires_label = expires_at.strftime("%A, %B %d, %Y at %I:%M %p UTC") if hasattr(expires_at, "strftime") else str(expires_at)
+
+    subject = "Your E-VENT registration invitation"
+    plain = (
+        f"Hi there,\n\n"
+        f"An administrator has invited you to create an E-VENT account.\n\n"
+        f"Open the signup page and enter this invitation code when prompted:\n\n"
+        f"  {code}\n\n"
+        f"Signup: {signup_url}\n"
+        f"This code expires on {expires_label}.\n\n"
+        f"If you were not expecting this email, you can ignore it.\n"
+        f"— The E-VENT Team"
+    )
+    html = f"""
+    <html>
+      <body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:auto;padding:20px;">
+        <h2 style="color:#4F46E5;">You're invited to E-VENT</h2>
+        <p>Hi there,</p>
+        <p>An administrator has invited you to create an account. Open the signup page and enter this invitation code when prompted:</p>
+        <div style="background:#F3F4F6;border-radius:8px;padding:20px;margin:20px 0;text-align:center;">
+          <p style="font-size:28px;letter-spacing:4px;font-weight:bold;margin:0;">{code}</p>
+        </div>
+        <p><a href="{signup_url}" style="color:#4F46E5;">Go to signup</a></p>
+        <p>This code expires on {expires_label}.</p>
+        <p style="margin-top:24px;">— <strong>The E-VENT Team</strong></p>
+        <hr style="border:none;border-top:1px solid #E5E7EB;margin-top:32px;" />
+        <p style="font-size:12px;color:#9CA3AF;">If you were not expecting this email, you can ignore it.</p>
+      </body>
+    </html>
+    """
+    return subject, plain, html

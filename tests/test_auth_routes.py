@@ -13,6 +13,7 @@ class TestAuthRoutes:
         payload = {
             "email": "test@test.com",
             "password": "password123",
+            "invite_code": "ABCD-EFGH",
             "username": "testuser",
             "full_name": "Test User",
             "dob": "1990-01-01",
@@ -31,7 +32,8 @@ class TestAuthRoutes:
             dob="1990-01-01",
             gender="male",
             interests=["coding"],
-            username="testuser"
+            username="testuser",
+            invite_code="ABCD-EFGH",
         )
 
     @patch("app.services.profile_service.choose_username")
@@ -146,6 +148,7 @@ class TestAuthRoutes:
         payload = {
             "email": "test@test.com",
             "password": "password123",
+            "invite_code": "ABCD-EFGH",
             "full_name": "Test User",
             "dob": "1990-01-01",
             "gender": "male",
@@ -159,6 +162,7 @@ class TestAuthRoutes:
         payload = {
             "email": "test@test.com",
             "password": "password123",
+            "invite_code": "ABCD-EFGH",
             "username": "testuser",
             "full_name": "   ",
             "dob": "1990-01-01",

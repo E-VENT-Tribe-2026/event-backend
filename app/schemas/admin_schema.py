@@ -213,6 +213,15 @@ class AdminEventDetailResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class SendRegistrationInviteResponse(BaseModel):
+    email: str
+    code: str
+    expires_at: str
+    message: str
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class GrantAdminRoleResponse(BaseModel):
     message: str = "User made administrator successfully."
     user_id: str

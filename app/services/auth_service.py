@@ -19,10 +19,17 @@ def register_user(
     gender: str, 
     interests: list[str],
     full_name: str | None = None,
-    username: str | None = None
+    username: str | None = None,
+    invite_code: str | None = None,
 ):
     valid_username = validate_username(username)
     valid_full_name = validate_full_name(full_name)
+
+    from app.services.registration_invite_service import (
+        mark_registration_invite_used,
+        require_registration_invite,
+    )
+    invite = require_registration_invite(email, invite_code or "")
 
     # Check if username is already in use
     existing_profile = (
@@ -83,6 +90,8 @@ def register_user(
             .eq("id", user_id)
             .execute()
         )
+
+        mark_registration_invite_used(invite.get("id"), user_id)
 
         if auth_response.session is None:
             return {"message": "User registered. Please confirm email to activate profile."}

@@ -20,6 +20,7 @@ PUBLIC_PATHS = {
     "/api/health",
     "/api/auth/login",
     "/api/auth/register",
+    "/api/auth/verify-invite",
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/auth/verify-reset-token",
