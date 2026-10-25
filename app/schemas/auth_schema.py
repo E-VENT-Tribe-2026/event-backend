@@ -10,11 +10,19 @@ from app.utils.schema_validators import validate_username_value, validate_full_n
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
+    invite_code: str
     username: Optional[str] = None
     full_name: Optional[str] = None
     dob: date
     gender: str
     interests: List[str] = []
+
+    @field_validator("invite_code", mode="before")
+    @classmethod
+    def validate_invite_code(cls, v):
+        if v is None or not str(v).strip():
+            raise ValueError("Invitation code is required.")
+        return str(v).strip()
 
     @field_validator("username", mode="before")
     @classmethod
@@ -29,6 +37,18 @@ class RegisterRequest(BaseModel):
         if v is None:
             return None
         return validate_full_name_value(v)
+
+
+class VerifyInviteRequest(BaseModel):
+    email: EmailStr
+    invite_code: str
+
+    @field_validator("invite_code", mode="before")
+    @classmethod
+    def validate_invite_code(cls, v):
+        if v is None or not str(v).strip():
+            raise ValueError("Invitation code is required.")
+        return str(v).strip()
 
 
 class LoginRequest(BaseModel):

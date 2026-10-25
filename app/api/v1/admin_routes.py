@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from pydantic import EmailStr
 from app.core.dependencies import require_admin
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.admin_schema import (
@@ -12,6 +13,7 @@ from app.schemas.admin_schema import (
     AdminEventDetailResponse,
     GrantAdminRoleResponse,
     AdminUserListCounters,
+    SendRegistrationInviteResponse,
 )
 from app.services.admin_service import (
     get_admin_account_details,
@@ -33,6 +35,7 @@ from app.services.warning_service import give_warning, withdraw_warning, get_war
 from app.services.audit_service import list_audit_log
 from app.schemas.suspension_schema import SuspensionReasonRequest, SuspensionResponse
 from app.services.suspension_service import suspend_user, lift_suspension
+from app.services.registration_invite_service import send_registration_invite
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,16 @@ def _slash(path: str, methods: list[str], **kwargs):
         )
         return fn
     return deco
+
+
+@router.post("/invite_user/{email_address}", response_model=SendRegistrationInviteResponse)
+@_slash("/invite_user/{email_address}", ["POST"], response_model=SendRegistrationInviteResponse)
+def invite_user(
+    email_address: EmailStr = Path(..., description="Email of the person to invite"),
+    admin=Depends(require_admin),
+):
+    """Email a one-time signup code to this address. They must enter it to register."""
+    return send_registration_invite(admin_id=admin.id, email=email_address)
 
 
 @router.get("/verify")

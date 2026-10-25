@@ -6,6 +6,7 @@ from supabase import create_client, Client
 
 from app.schemas.auth_schema import (
     RegisterRequest,
+    VerifyInviteRequest,
     LoginRequest,
     ChangePasswordRequest,
     ChooseUsernameRequest,
@@ -59,6 +60,14 @@ else:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
+@router.post("/verify-invite")
+@limiter.limit("20/minute")
+def verify_invite(request: Request, data: VerifyInviteRequest):
+    """Check an administrator invitation code before showing the registration form."""
+    from app.services.registration_invite_service import verify_registration_invite
+    return verify_registration_invite(data.email, data.invite_code)
+
+
 @router.post("/register")
 @limiter.limit("10/minute")
 def register(request: Request, data: RegisterRequest):
@@ -69,7 +78,8 @@ def register(request: Request, data: RegisterRequest):
         dob=data.dob.isoformat(),
         gender=data.gender,
         interests=data.interests,
-        username=data.username
+        username=data.username,
+        invite_code=data.invite_code,
     )
 
 

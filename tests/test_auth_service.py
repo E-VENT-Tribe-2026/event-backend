@@ -28,6 +28,16 @@ def _mock_supabase():
 # ──────────────────────────────────────────────
 
 class TestRegisterUser:
+    @pytest.fixture(autouse=True)
+    def _valid_invite(self):
+        with patch(
+            "app.services.registration_invite_service.require_registration_invite",
+            return_value={"id": 1},
+        ), patch(
+            "app.services.registration_invite_service.mark_registration_invite_used",
+        ):
+            yield
+
     def _make_auth_response(self, user_id="uid-1", with_session=True):
         user = MagicMock()
         user.id = user_id
