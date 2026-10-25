@@ -41,6 +41,7 @@ def _stub_query(rows, total):
     chain = MagicMock()
     chain.select.return_value = chain
     chain.eq.return_value = chain
+    chain.is_.return_value = chain
     chain.gte.return_value = chain
     chain.gt.return_value = chain
     chain.lt.return_value = chain

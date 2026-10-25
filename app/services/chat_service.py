@@ -1,6 +1,7 @@
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.services.profile_service import get_user_summaries, build_user_summary
+from app.services.removed_content import assert_event_not_removed, message_removed_error
 import logging
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,17 @@ def _assert_event_not_cancelled(event_id: str) -> None:
 
 
 def _enrich_message(msg: dict, event_id: str, organizer_id=_ORGANIZER_UNSET, senders: dict = None) -> dict:
-    """Add sender, sender_name and sender_role to a message dict."""
+    """Add sender, sender_name and sender_role to a message dict.
+
+    A message an administrator removed (#236) keeps its sender but loses its text for everyone:
+    content is "" and is_removed is true. removed_by is never sent to users.
+    """
+    msg["is_removed"] = bool(msg.get("removed_at"))
+    msg.setdefault("removed_at", None)
+    msg.pop("removed_by", None)
+    if msg["is_removed"]:
+        msg["content"] = ""
+
     sid = msg.get("sender_id")
     if not sid:
         msg["sender"] = None
@@ -123,6 +134,7 @@ def post_system_notification(event_id: str, content: str) -> dict | None:
 
 def send_message(user_id: str, event_id: str, content: str) -> dict:
     _assert_participant(user_id, event_id)
+    assert_event_not_removed(event_id)
     _assert_event_not_cancelled(event_id)
 
     if not content or not content.strip():
@@ -142,6 +154,7 @@ def send_message(user_id: str, event_id: str, content: str) -> dict:
 
 def get_event_messages(user_id: str, event_id: str, page: int = 1, limit: int = 50) -> dict:
     _assert_participant(user_id, event_id)
+    assert_event_not_removed(event_id)
 
     start = (page - 1) * limit
     end = start + limit - 1
@@ -175,10 +188,13 @@ def get_event_messages(user_id: str, event_id: str, page: int = 1, limit: int = 
 
 def update_message(user_id: str, message_id: int, new_content: str) -> dict:
     message = _get_message_or_404(message_id)
+    assert_event_not_removed(message["event_id"])
     _assert_event_not_cancelled(message["event_id"])
 
     if message["sender_id"] != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only edit your own messages")
+    if message.get("removed_at"):
+        raise message_removed_error()
 
     if not new_content or not new_content.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Updated content cannot be empty")
@@ -198,10 +214,13 @@ def update_message(user_id: str, message_id: int, new_content: str) -> dict:
 
 def delete_message(user_id: str, message_id: int) -> dict:
     message = _get_message_or_404(message_id)
+    assert_event_not_removed(message["event_id"])
     _assert_event_not_cancelled(message["event_id"])
 
     if message["sender_id"] != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only delete your own messages")
+    if message.get("removed_at"):
+        raise message_removed_error()
 
     supabase.table("event_chats").delete().eq("id", message_id).execute()
 

@@ -46,6 +46,7 @@ def _stub_lookup(rows):
     chain = MagicMock()
     chain.select.return_value = chain
     chain.eq.return_value = chain
+    chain.is_.return_value = chain
     chain.limit.return_value = chain
     chain.execute.return_value = MagicMock(data=rows)
     supabase = MagicMock()

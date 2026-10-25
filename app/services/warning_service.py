@@ -60,17 +60,16 @@ def user_ids_with_counted_warnings() -> list:
 
 # ---- administrator actions --------------------------------------------------
 
-def give_warning(user_id: str, admin_id: str, reason: str,
-                 about_type: str | None = None, about_id: str | None = None) -> dict:
+def _is_administrator(user_id: str) -> bool | None:
+    """True/False for an existing profile, None when there is no such profile."""
     prof = supabase.table("profiles").select("id, role").eq("id", user_id).limit(1).execute()
     if not prof.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    if prof.data[0].get("role") in ("administrator", "admin"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Administrator accounts cannot be warned.")
+        return None
+    return prof.data[0].get("role") in ("administrator", "admin")
 
-    now = _now()
-    # 1. The warning itself. If this fails, nothing else is written.
+
+def _insert_warning(user_id: str, admin_id: str, reason: str,
+                    about_type: str | None, about_id: str | None, now: str) -> dict:
     created = supabase.table("warnings").insert({
         "user_id": user_id,
         "admin_id": admin_id,
@@ -79,7 +78,44 @@ def give_warning(user_id: str, admin_id: str, reason: str,
         "about_id": about_id,
         "created_at": now,
     }).execute()
-    warning = created.data[0]
+    return created.data[0]
+
+
+def give_removal_warning(user_id: str, admin_id: str, reason: str,
+                         about_type: str, about_id: str) -> dict | None:
+    """The warning that comes with removing a user's event or message (#236).
+
+    Stored like any warning (counts, history, dialog to acknowledge) but it sends no
+    notification of its own and writes no audit entry: the removal sends the one
+    "Your content was removed" notification and writes the one audit entry.
+    Returns None, and gives no warning, when the owner is now an administrator.
+    A failure raises, so the caller can undo the removal.
+    """
+    if _is_administrator(user_id):
+        return None
+    # A retry after a lost response must not warn twice for the same removal.
+    existing = (
+        supabase.table("warnings").select("*")
+        .eq("user_id", user_id).eq("about_type", about_type).eq("about_id", about_id)
+        .limit(1).execute()
+    )
+    if existing.data:
+        return existing.data[0]
+    return _insert_warning(user_id, admin_id, reason, about_type, about_id, _now())
+
+
+def give_warning(user_id: str, admin_id: str, reason: str,
+                 about_type: str | None = None, about_id: str | None = None) -> dict:
+    is_admin = _is_administrator(user_id)
+    if is_admin is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if is_admin:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Administrator accounts cannot be warned.")
+
+    now = _now()
+    # 1. The warning itself. If this fails, nothing else is written.
+    warning = _insert_warning(user_id, admin_id, reason, about_type, about_id, now)
 
     # 2. The notification. Inserted directly: create_notification() skips "duplicates"
     #    with the same message within 10 seconds, which would drop a second warning.

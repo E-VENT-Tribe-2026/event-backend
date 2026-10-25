@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Path
 from pydantic import EmailStr
 from app.core.dependencies import require_admin
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
@@ -14,6 +14,9 @@ from app.schemas.admin_schema import (
     GrantAdminRoleResponse,
     AdminUserListCounters,
     SendRegistrationInviteResponse,
+    RemoveContentRequest,
+    RemoveEventResponse,
+    RemoveMessageResponse,
 )
 from app.services.admin_service import (
     get_admin_account_details,
@@ -33,6 +36,7 @@ from app.schemas.warning_schema import (
 )
 from app.services.warning_service import give_warning, withdraw_warning, get_warning_history
 from app.services.audit_service import list_audit_log
+from app.services.content_removal_service import remove_event, remove_message
 from app.schemas.suspension_schema import SuspensionReasonRequest, SuspensionResponse
 from app.services.suspension_service import suspend_user, lift_suspension
 from app.services.registration_invite_service import send_registration_invite
@@ -224,6 +228,40 @@ def get_event(
     and its participant list with profile picture, full name and username.
     """
     return get_admin_event_details(event_id=event_id)
+
+@router.post("/events/{event_id}/remove", response_model=RemoveEventResponse)
+@_slash("/events/{event_id}/remove", ["POST"], response_model=RemoveEventResponse)
+def post_remove_event(
+    background_tasks: BackgroundTasks,
+    event_id: str = Path(..., description="Event to remove"),
+    body: Optional[RemoveContentRequest] = None,
+    admin=Depends(require_admin),
+):
+    """
+    Marks an event as removed (never deletes it). Users no longer see it, the organizer is notified
+    and warned, the participants of an upcoming event are notified, and the audit log records it.
+    Send report_id when the removal comes from a report. Refused when already removed.
+    """
+    return remove_event(event_id=event_id, admin_id=admin.id, report_id=body.report_id if body else None,
+                        background_tasks=background_tasks)
+
+
+@router.post("/events/{event_id}/messages/{message_id}/remove", response_model=RemoveMessageResponse)
+@_slash("/events/{event_id}/messages/{message_id}/remove", ["POST"], response_model=RemoveMessageResponse)
+def post_remove_message(
+    event_id: str = Path(..., description="Event whose chat holds the message"),
+    message_id: int = Path(..., ge=1, le=9223372036854775807, description="Chat message to remove"),
+    body: Optional[RemoveContentRequest] = None,
+    admin=Depends(require_admin),
+):
+    """
+    Marks a chat message as removed (never deletes it). The chat shows it as removed, without its text,
+    the sender is notified and warned, and the audit log records it.
+    Send report_id when the removal comes from a report. Refused when already removed or for a system message.
+    """
+    return remove_message(event_id=event_id, message_id=message_id, admin_id=admin.id,
+                          report_id=body.report_id if body else None)
+
 
 @router.post("/users/{user_id}/warnings", response_model=WarningHistoryItem, status_code=201)
 @_slash("/users/{user_id}/warnings", ["POST"], response_model=WarningHistoryItem, status_code=201)

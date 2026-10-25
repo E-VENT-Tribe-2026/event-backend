@@ -7,6 +7,7 @@ from app.services.notification_service import create_notification
 from app.services.chat_service import post_system_notification
 from app.services.profile_service import get_username, get_user_summaries, build_user_summary
 from app.services.block_visibility import filter_hidden_events, hidden_events_filter
+from app.services.removed_content import event_removed_error, filter_removed_events
 import logging
 
 logger = logging.getLogger(__name__)
@@ -201,6 +202,9 @@ def get_event(event_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Event not found"
         )
+
+    if isinstance(response.data, dict) and response.data.get("removed_at"):
+        raise event_removed_error()
 
     return present_event(response.data)
 
@@ -420,6 +424,7 @@ def get_profile_events(user_id: str, viewer_id: str | None = None):
         supabase.table("events")
         .select(PROFILE_EVENT_COLUMNS)
         .eq("created_by", user_id)
+        .is_("removed_at", "null")
         .execute()
     )
     organized = present_events(filter_hidden_events(organized_resp.data or [], viewer_id))
@@ -432,7 +437,8 @@ def get_profile_events(user_id: str, viewer_id: str | None = None):
         .execute()
     )
     joined = [r["events"] for r in (joined_resp.data or []) if r.get("events")]
-    joined = present_events(filter_hidden_events([e for e in joined if e.get("created_by") != user_id], viewer_id))
+    joined = filter_removed_events([e for e in joined if e.get("created_by") != user_id])
+    joined = present_events(filter_hidden_events(joined, viewer_id))
 
     return {
         "organized": _split_profile_events(organized),
@@ -452,6 +458,7 @@ def get_all_events_by_user(user_id: str):
             .table("events")
             .select("*")
             .eq("created_by", str(user_id))
+            .is_("removed_at", "null")
             .order("created_at", desc=True)
             .execute()
         )
@@ -493,7 +500,7 @@ def list_events(
             response = supabase.rpc("search_events", {
                 "query_embedding": embedding,
                 "query_text": search,
-                "match_count": limit + 20 if viewer_id else limit
+                "match_count": limit + 20  # room for removed events and a viewer's hidden ones
             }).execute()
 
             data = [
@@ -501,8 +508,10 @@ def list_events(
                 if e.get("end_datetime", "") >= now
                 and e.get("status") == "active"
             ]
+            data = filter_removed_events(data)
             if viewer_id:
-                data = filter_hidden_events(data, viewer_id)[:limit]
+                data = filter_hidden_events(data, viewer_id)
+            data = data[:limit]
 
             return {
                 "page": page,
@@ -515,6 +524,7 @@ def list_events(
 
     query = query.eq("status", "active")
     query = query.gte("end_datetime", now)
+    query = query.is_("removed_at", "null")
 
     visible = hidden_events_filter(viewer_id)
     if visible:
@@ -592,6 +602,7 @@ def get_max_event_price():  # Make sure the name is exactly this
     try:
         response = supabase.table("events") \
             .select("cost") \
+            .is_("removed_at", "null") \
             .order("cost", desc=True) \
             .limit(1) \
             .execute()
