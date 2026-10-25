@@ -12,6 +12,7 @@ from app.core.dependencies import require_regular_user
 # so the search limit leaves room for roughly one request per second for a full minute.
 SEARCH_LIMIT = 60
 FRIEND_REQUEST_LIMIT = 30
+REPORT_LIMIT = 10
 WINDOW_SECONDS = 60
 
 _hits: dict[tuple[str, str], deque] = defaultdict(deque)

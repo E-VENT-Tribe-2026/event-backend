@@ -25,3 +25,6 @@ CHAT_MESSAGE_MAX_LENGTH = 2000
 
 # Search text sent in query strings (event search, city filter, admin search).
 SEARCH_TEXT_MAX_LENGTH = 200
+
+# Report description: optional, required when the reason is Other.
+REPORT_DESCRIPTION_MAX_LENGTH = 1000
