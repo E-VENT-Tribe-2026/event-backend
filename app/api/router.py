@@ -15,6 +15,7 @@ from app.api.v1 import (
     invitation_routes,
     block_routes,
     warning_routes,
+    report_routes,
 )
 
 api_router = APIRouter()
@@ -112,4 +113,10 @@ api_router.include_router(
     block_routes.router,
     prefix="/blocks",
     tags=["Blocks"]
+)
+
+api_router.include_router(
+    report_routes.router,
+    prefix="/reports",
+    tags=["Reports"]
 )

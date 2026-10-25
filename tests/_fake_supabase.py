@@ -32,6 +32,13 @@ def _get(row: dict, col: str):
     return cur
 
 
+def _key(v):
+    """Sort and compare key: numbers (ids) numerically, everything else as text."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return (0, v, "")
+    return (1, 0, str(v or ""))
+
+
 def _same(a, b) -> bool:
     return a is not None and b is not None and str(a).lower() == str(b).lower()
 
@@ -114,11 +121,11 @@ class FakeQuery:
         self.preds.append(lambda r: str(_get(r, col) or "") >= str(val))
         return self
     def lt(self, col, val):
-        self.preds.append(lambda r: str(_get(r, col) or "") < str(val))
+        self.preds.append(lambda r: _key(_get(r, col)) < _key(val))
         return self
 
     def gt(self, col, val):
-        self.preds.append(lambda r: str(_get(r, col) or "") > str(val))
+        self.preds.append(lambda r: _key(_get(r, col)) > _key(val))
         return self
 
     @property
@@ -197,7 +204,7 @@ class FakeQuery:
             return SimpleNamespace(data=matched, count=None)
 
         for col, desc in reversed(self.orders):
-            matched = sorted(matched, key=lambda r: str(_get(r, col) or ""), reverse=desc)
+            matched = sorted(matched, key=lambda r: _key(_get(r, col)), reverse=desc)
         total = len(matched)
         if self.window:
             matched = matched[self.window[0]:self.window[1] + 1]
@@ -213,7 +220,7 @@ class FakeSupabase:
     def add(self, name, row):
         self._seq += 1
         row.setdefault("created_at", f"2026-01-01T00:00:{self._seq:02d}+00:00")
-        if name in ("friend_requests", "friendships", "notifications", "warnings", "logs"):
+        if name in ("friend_requests", "friendships", "notifications", "warnings", "logs", "event_chats", "reports"):
             row.setdefault("id", self._seq)
         self.tables.setdefault(name, []).append(row)
         return row
