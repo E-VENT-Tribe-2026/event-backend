@@ -47,6 +47,8 @@ class EventCreateRequest(BaseModel):
     location_name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    banner: Optional[str] = None
+    banner_url: Optional[str] = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -71,6 +73,8 @@ class EventUpdateRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     status: Optional[str] = None
+    banner: Optional[str] = None
+    banner_url: Optional[str] = None
 
     # Validators only run on fields the client actually sent, so a partial
     # update that leaves out the title is still accepted.

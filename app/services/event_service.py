@@ -69,6 +69,39 @@ def _email_participants(event: dict, email_type: str):
             logger.error(f"Email ({email_type}) failed for user {user_id}: {e}")
 
 
+def _normalize_event_banner(data: dict) -> dict:
+    """Accept banner or banner_url; persist only banner_url. Empty string clears it."""
+    if "banner" in data and "banner_url" not in data:
+        data["banner_url"] = data.get("banner")
+    data.pop("banner", None)
+    if "banner_url" in data:
+        value = data["banner_url"]
+        if isinstance(value, str):
+            value = value.strip() or None
+        data["banner_url"] = value
+    return data
+
+
+def present_event(event: dict | None) -> dict | None:
+    """Expose banner and banner_url together, the same way profiles do."""
+    if not isinstance(event, dict):
+        return event
+    if "banner_url" in event or "banner" in event:
+        banner = event.get("banner_url")
+        if banner is None:
+            banner = event.get("banner")
+        event["banner_url"] = banner
+        event["banner"] = banner
+    return event
+
+
+def present_events(events: list | None) -> list:
+    items = events or []
+    for item in items:
+        present_event(item)
+    return items
+
+
 def validate_coordinates(lat, lng):
     if lat is None or lng is None:
         return
@@ -89,6 +122,7 @@ def validate_coordinates(lat, lng):
 def create_event(user_id: str, data: dict):
     # 1. Clean data and attach user
     data["created_by"] = user_id
+    _normalize_event_banner(data)
     validate_coordinates(data.get("latitude"), data.get("longitude"))
 
     # 2. Fix numeric fields
@@ -151,7 +185,7 @@ def create_event(user_id: str, data: dict):
         f"Your event '{event.get('title', 'New Event')}' has been created"
     )
 
-    return event
+    return present_event(event)
 
 def get_event(event_id: str):
     response = (
@@ -168,7 +202,7 @@ def get_event(event_id: str):
             detail="Event not found"
         )
 
-    return response.data
+    return present_event(response.data)
 
 
 def attach_organizers(events: list) -> list:
@@ -259,6 +293,7 @@ def update_event(user_id: str, event_id: str, update_data: dict):
     logger.info(f"update_event called for event {event_id} by user {user_id}")
 
     event = get_event(event_id)
+    _normalize_event_banner(update_data)
 
     validate_coordinates(
         update_data.get("latitude"),
@@ -318,8 +353,8 @@ def update_event(user_id: str, event_id: str, update_data: dict):
     logger.info(f"Event {event_id} updated successfully")
 
     # Return result + context needed for background side effects
-    updated_event = {**event, **response.data[0]}
-    return response.data[0], event, updated_event
+    updated_event = present_event({**event, **response.data[0]})
+    return present_event(response.data[0]), event, updated_event
 
 def delete_event(user_id: str, event_id: str):
     raise HTTPException(
@@ -331,7 +366,8 @@ def delete_event(user_id: str, event_id: str):
 # Profile events intentionally share the /api/events (list_events) column set.
 PROFILE_EVENT_COLUMNS = (
     "id, title, description, category, cost, max_capacity, status, start_datetime, "
-    "end_datetime, location_name, latitude, longitude, created_by, created_at, updated_at"
+    "end_datetime, location_name, latitude, longitude, created_by, created_at, "
+    "updated_at, banner_url"
 )
 PROFILE_EVENTS_GROUP_LIMIT = 50
 
@@ -386,7 +422,7 @@ def get_profile_events(user_id: str, viewer_id: str | None = None):
         .eq("created_by", user_id)
         .execute()
     )
-    organized = filter_hidden_events(organized_resp.data or [], viewer_id)
+    organized = present_events(filter_hidden_events(organized_resp.data or [], viewer_id))
 
     joined_resp = (
         supabase.table("event_participants")
@@ -396,7 +432,7 @@ def get_profile_events(user_id: str, viewer_id: str | None = None):
         .execute()
     )
     joined = [r["events"] for r in (joined_resp.data or []) if r.get("events")]
-    joined = filter_hidden_events([e for e in joined if e.get("created_by") != user_id], viewer_id)
+    joined = present_events(filter_hidden_events([e for e in joined if e.get("created_by") != user_id], viewer_id))
 
     return {
         "organized": _split_profile_events(organized),
@@ -420,7 +456,7 @@ def get_all_events_by_user(user_id: str):
             .execute()
         )
 
-        event_list = response.data if response.data else []
+        event_list = present_events(response.data if response.data else [])
 
         return {
             "status": "success",
@@ -471,7 +507,7 @@ def list_events(
             return {
                 "page": page,
                 "limit": limit,
-                "data": data
+                "data": present_events(data)
             }
 
     # Otherwise standard filtered query
@@ -505,7 +541,7 @@ def list_events(
     return {
         "page": page,
         "limit": limit,
-        "data": response.data
+        "data": present_events(response.data)
     }
     
 def cancel_event(user_id: str, event_id: str):

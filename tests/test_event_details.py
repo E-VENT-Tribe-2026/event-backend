@@ -94,6 +94,8 @@ def test_successful_lookup_returns_current_details_and_null_optional_fields():
         "longitude": None,
         "created_by": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         "status": "active",
+        "banner": None,
+        "banner_url": None,
     }
     supabase.table.assert_called_once_with("events")
     selected = chain.select.call_args.args[0]

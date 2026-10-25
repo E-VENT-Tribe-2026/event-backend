@@ -284,7 +284,7 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
     filter_norm = (status_filter or "all").lower().strip()
 
     query = supabase.table("events").select(
-        "id, title, start_datetime, end_datetime, status, created_by",
+        "id, title, start_datetime, end_datetime, status, created_by, banner_url",
         count="exact"
     )
 
@@ -357,6 +357,8 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
             "status": ev.get("status"),
             "is_cancelled": is_canc,
             "organizer": organizer,
+            "banner": ev.get("banner_url"),
+            "banner_url": ev.get("banner_url"),
         })
 
     return {
@@ -685,6 +687,8 @@ def get_admin_event_details(event_id: str) -> dict:
         "participants": participants,
         "chats": chats,
         "chat": chats,
+        "banner": event.get("banner_url"),
+        "banner_url": event.get("banner_url"),
     }
 
 def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_text: str) -> tuple[int, int]:

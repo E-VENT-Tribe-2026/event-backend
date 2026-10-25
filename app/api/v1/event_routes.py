@@ -1,10 +1,12 @@
 import logging
+import time
 
-from fastapi import APIRouter, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, BackgroundTasks, File, UploadFile
 from app.core.dependencies import get_current_user, get_current_onboarded_user, get_optional_user
 from app.core.input_limits import SEARCH_TEXT_MAX_LENGTH
 from app.schemas.event_schema import EventCreateRequest, EventUpdateRequest
 from fastapi import HTTPException
+from app.db.supabase_client import supabase
 from app.services import event_service
 from app.services.event_service import (
     create_event,
@@ -24,6 +26,14 @@ from app.services.participant_service import attach_friends_attending_count
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Same allowlist as profile photos — event banners go in the "avatars" bucket.
+ALLOWED_BANNER_EXTENSIONS = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
 
 
 # IMPORTANT: Static routes (/me, /my) must be declared BEFORE dynamic routes (/{event_id})
@@ -64,6 +74,43 @@ def get_all_my_events(user=Depends(get_current_onboarded_user)):
             status_code=500,
             detail="Could not fetch events for user"
         )
+
+
+@router.post("/upload-banner")
+async def upload_event_banner(
+    file: UploadFile = File(...),
+    user=Depends(get_current_onboarded_user),
+):
+    """Upload an event banner photo to the avatars bucket and return its public URL."""
+    try:
+        file_ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else ""
+        content_type = ALLOWED_BANNER_EXTENSIONS.get(file_ext)
+        if not content_type:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file format. Please upload a JPG, PNG, or WEBP image.",
+            )
+
+        file_path = f"{user.id}/event-banner-{int(time.time())}.{file_ext}"
+        file_bytes = await file.read()
+
+        supabase.storage.from_("avatars").upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+
+        public_url_res = supabase.storage.from_("avatars").get_public_url(file_path)
+        public_url = public_url_res if isinstance(public_url_res, str) else public_url_res.get("publicUrl")
+        if not public_url:
+            raise HTTPException(status_code=500, detail="Failed to generate public URL for photo.")
+
+        return {"banner": public_url, "banner_url": public_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Event banner upload failed for user {user.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not upload event banner.")
 
 
 @router.get("")

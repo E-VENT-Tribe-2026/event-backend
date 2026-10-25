@@ -65,6 +65,8 @@ class AdminEventListItem(BaseModel):
     status: Optional[str] = None
     is_cancelled: bool = False
     organizer: Optional[AdminEventOrganizerSummary] = None
+    banner: Optional[str] = None
+    banner_url: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -205,6 +207,8 @@ class AdminEventDetailResponse(BaseModel):
     participants: List[AdminParticipantItem] = []
     chats: List[AdminChatMessageItem] = []
     chat: List[AdminChatMessageItem] = []
+    banner: Optional[str] = None
+    banner_url: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 

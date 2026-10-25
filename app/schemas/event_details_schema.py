@@ -33,6 +33,8 @@ class EventDetails(BaseModel):
     longitude: Optional[float] = None
     created_by: Optional[str] = None
     status: str
+    banner: Optional[str] = None
+    banner_url: Optional[str] = None
 
 
 class EventDetailsResponse(BaseModel):

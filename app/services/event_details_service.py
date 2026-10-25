@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 _DETAIL_COLUMNS = (
     "id, title, description, category, cost, max_capacity, status, "
-    "start_datetime, end_datetime, location_name, latitude, longitude, created_by"
+    "start_datetime, end_datetime, location_name, latitude, longitude, created_by, "
+    "banner_url"
 )
 _FIELD_MESSAGES = {
     "event_id": "Event ID must be a UUID.",
@@ -155,6 +156,8 @@ def _details(row: dict) -> dict:
         "longitude": None if row.get("longitude") is None else float(row["longitude"]),
         "created_by": _optional_text(row.get("created_by")),
         "status": _text(row.get("status")),
+        "banner": _optional_text(row.get("banner_url") or row.get("banner")),
+        "banner_url": _optional_text(row.get("banner_url") or row.get("banner")),
     }
 
 

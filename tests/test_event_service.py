@@ -57,6 +57,25 @@ class TestGetEvent:
         assert get_event("e1") == event
 
     @patch("app.services.event_service.supabase")
+    def test_returns_banner_alias(self, mock_sb):
+        event = {
+            "id": "e1",
+            "title": "Party",
+            "banner_url": "https://cdn.example.com/avatars/u1/event-banner.png",
+        }
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.return_value = MagicMock(data=event)
+
+        from app.services.event_service import get_event
+        result = get_event("e1")
+        assert result["banner_url"] == event["banner_url"]
+        assert result["banner"] == event["banner_url"]
+
+    @patch("app.services.event_service.supabase")
     def test_raises_404_when_missing(self, mock_sb):
         chain = MagicMock()
         mock_sb.table.return_value = chain
@@ -160,6 +179,38 @@ class TestCreateEvent:
         payload = mock_sb.table.return_value.insert.call_args_list[0][0][0]
         assert payload["event_embedding"] == [0.1]
 
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    def test_create_event_persists_banner_url(self, mock_sb, mock_embed, mock_notify):
+        banner = "https://cdn.example.com/avatars/u1/event-banner.png"
+        event_row = {"id": "e1", "title": "X", "banner_url": banner}
+        self._stub_chain(mock_sb, event_row)
+
+        from app.services.event_service import create_event
+        result = create_event("u1", {"title": "X", "banner_url": banner})
+
+        payload = mock_sb.table.return_value.insert.call_args_list[0][0][0]
+        assert payload["banner_url"] == banner
+        assert "banner" not in payload
+        assert result["banner_url"] == banner
+        assert result["banner"] == banner
+
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    def test_create_event_aliases_banner(self, mock_sb, mock_embed, mock_notify):
+        banner = "https://cdn.example.com/avatars/u1/event-banner.webp"
+        event_row = {"id": "e1", "banner_url": banner}
+        self._stub_chain(mock_sb, event_row)
+
+        from app.services.event_service import create_event
+        create_event("u1", {"title": "X", "banner": banner})
+
+        payload = mock_sb.table.return_value.insert.call_args_list[0][0][0]
+        assert payload["banner_url"] == banner
+        assert "banner" not in payload
+
 
 # ──────────────────────────────────────────────
 # update_event
@@ -195,6 +246,42 @@ class TestUpdateEvent:
         result, _, _ = update_event("u1", "e1", {"title": "New"})
 
         assert result["title"] == "New"
+
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    def test_update_sets_and_clears_banner(self, mock_sb, mock_embed, mock_notify):
+        existing = self._existing_event()
+        banner = "https://cdn.example.com/avatars/u1/event-banner.png"
+        updated = {**existing, "banner_url": banner}
+
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.select.return_value = chain
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        chain.single.return_value = chain
+        chain.execute.side_effect = [
+            MagicMock(data=existing),
+            MagicMock(data=[updated]),
+        ]
+
+        from app.services.event_service import update_event
+        result, _, _ = update_event("u1", "e1", {"banner": banner})
+        payload = chain.update.call_args.args[0]
+        assert payload["banner_url"] == banner
+        assert "banner" not in payload
+        assert result["banner"] == banner
+
+        cleared = {**existing, "banner_url": None}
+        chain.execute.side_effect = [
+            MagicMock(data=updated),
+            MagicMock(data=[cleared]),
+        ]
+        cleared_result, _, _ = update_event("u1", "e1", {"banner_url": "  "})
+        clear_payload = chain.update.call_args.args[0]
+        assert clear_payload["banner_url"] is None
+        assert cleared_result["banner"] is None
 
     @patch("app.services.event_service.generate_embedding", return_value=None)
     @patch("app.services.event_service.supabase")
