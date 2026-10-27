@@ -162,6 +162,13 @@ def read_user_friends(
             detail={"code": "profile_unavailable", "message": "This profile is unavailable."},
         )
 
+    # #226: a user who blocked someone sees only the top of that profile (#184), never their friends.
+    if not is_self and has_blocked(viewer_id, target_id):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "friends_list_unavailable", "message": "You blocked this user."},
+        )
+
     profile = get_public_profile(target_id)
     friendship = get_friendship_state(viewer_id, target_id)
     is_friend = is_self or (friendship.get("status") == "friends")
