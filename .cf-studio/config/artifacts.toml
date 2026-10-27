@@ -4,6 +4,25 @@
 name = "EventBackend"
 slug = "eventbackend"
 kit = "sdlc"
-artifacts = []
-codebase = []
-children = []
+artifacts_dir = "docs/architecture"
+
+[[systems.codebase]]
+name = "Backend Application"
+path = "app"
+extensions = [".py"]
+
+[[systems.codebase]]
+name = "Database Migrations"
+path = "supabase/migrations"
+extensions = [".sql"]
+
+[[systems.codebase]]
+name = "Backend Tests"
+path = "tests"
+extensions = [".py"]
+
+[[systems.artifacts]]
+name = "Suspension Protection and Cancellation Reasons ADR"
+path = "docs/architecture/ADR/ADR-002-suspension-protection-and-cancellation-reasons.md"
+kind = "ADR"
+traceability = "FULL"
