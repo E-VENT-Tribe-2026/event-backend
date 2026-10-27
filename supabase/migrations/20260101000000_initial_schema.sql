@@ -1,5 +1,6 @@
 -- =============================================================================
 -- Migration: 20260101000000_initial_schema.sql
+-- @cpt-eventbackend-adr-database-migration-ordering
 -- Description:
 --   Baseline schema establishing foundational tables before subsequent seed rows,
 --   RLS policies, and feature-specific migrations.

@@ -1,5 +1,6 @@
 -- ====================================================================
 -- Migration: Friendship Constraints & Notifications Link (Issue #181)
+-- @cpt-eventbackend-adr-database-migration-ordering
 -- ====================================================================
 
 -- 1. Ensure `friend_requests` table exists and matches ERD schema
