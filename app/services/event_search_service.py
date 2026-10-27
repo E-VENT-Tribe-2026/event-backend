@@ -104,6 +104,7 @@ def _fetch_events(criteria: SearchEventsInput, viewer_id: Optional[str] = None) 
         .select(_SUMMARY_COLUMNS, count="exact")
         .eq("status", "active")
         .gte("end_datetime", now)
+        .is_("removed_at", "null")
     )
 
     visible = hidden_events_filter(viewer_id)

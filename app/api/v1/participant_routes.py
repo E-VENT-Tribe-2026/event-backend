@@ -15,7 +15,7 @@ from app.services.participant_service import (
     _remove_side_effects,
     _single_profile,
 )
-from app.services.event_service import attach_organizers
+from app.services.event_service import attach_organizers, get_event
 
 router = APIRouter()
 
@@ -60,12 +60,14 @@ def participants_friends_api(event_id: str, user=Depends(get_current_user)):
 
 @router.get("/{event_id}/participants/count")
 def participants_count_api(event_id: str, user=Depends(get_current_user)):
+    get_event(event_id)  # 404 for an unknown event, 410 for one an administrator removed (#236)
     participants = get_event_participants(event_id)
     return {"event_id": event_id, "count": len(participants)}
 
 
 @router.get("/{event_id}/my-status")
 def my_status_api(event_id: str, user=Depends(get_current_onboarded_user)):
+    get_event(event_id)  # 410 for a removed event (#236)
     response = (
         supabase.table("event_participants")
         .select("status")

@@ -109,8 +109,9 @@ class TestParticipantListAccess:
 
     def test_count_stays_open_to_any_signed_in_user(self, client):
         _as(STRANGER)
-        with patch("app.api.v1.participant_routes.get_event_participants",
-                   return_value=[{"user_id": ORGANIZER}, {"user_id": PARTICIPANT}]):
+        with patch("app.api.v1.participant_routes.get_event", return_value=EVENT), \
+                patch("app.api.v1.participant_routes.get_event_participants",
+                      return_value=[{"user_id": ORGANIZER}, {"user_id": PARTICIPANT}]):
             res = client.get(f"/api/participants/{EVENT_ID}/participants/count")
         assert res.status_code == 200
         assert res.json() == {"event_id": EVENT_ID, "count": 2}

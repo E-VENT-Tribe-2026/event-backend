@@ -50,6 +50,7 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=event)
 
@@ -67,6 +68,7 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=event)
 
@@ -81,6 +83,7 @@ class TestGetEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=None)
 
@@ -101,6 +104,7 @@ class TestCreateEvent:
         chain.insert.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.execute.return_value = MagicMock(data=[event_row])
         return chain
     
@@ -233,6 +237,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.gte.return_value = chain
         chain.single.return_value = chain
         # Calls in order: get_event, update, participants, notifications
@@ -260,6 +265,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.side_effect = [
             MagicMock(data=existing),
@@ -291,6 +297,7 @@ class TestUpdateEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=existing)
 
@@ -307,6 +314,7 @@ class TestUpdateEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=existing)
 
@@ -327,6 +335,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.gte.return_value = chain
         chain.single.return_value = chain
         chain.execute.side_effect = [
@@ -353,6 +362,7 @@ class TestUpdateEvent:
         chain.select.return_value = chain
         chain.update.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.gte.return_value = chain
         chain.single.return_value = chain
         chain.execute.side_effect = [
@@ -409,6 +419,7 @@ class TestCancelEvent:
         chain.update.return_value = chain
         chain.delete.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
 
         chain.execute.side_effect = [
@@ -438,6 +449,7 @@ class TestCancelEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=existing)
 
@@ -458,6 +470,7 @@ class TestCancelEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=existing)
 
@@ -479,6 +492,7 @@ class TestCancelEvent:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=existing)
 
@@ -502,6 +516,7 @@ class TestGetAllEventsByUser:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.order.return_value = chain
         chain.execute.return_value = MagicMock(data=rows)
 
@@ -525,6 +540,7 @@ class TestGetAllEventsByUser:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.order.return_value = chain
         chain.execute.return_value = MagicMock(data=None)
 
@@ -545,6 +561,7 @@ class TestListEvents:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.gte.return_value = chain
         chain.gt.return_value = chain
         chain.ilike.return_value = chain
@@ -613,7 +630,7 @@ class TestListEvents:
         mock_sb.rpc.assert_called_once_with("search_events", {
             "query_embedding": [0.1, 0.2],
             "query_text": "outdoor festival",
-            "match_count": 10,
+            "match_count": 30,  # limit + 20: room for events an administrator removed (#236)
         })
         
         # Verify the result contains our future event
@@ -661,6 +678,7 @@ class TestUpdateEventSideEffects:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.execute.return_value = MagicMock(data=[{"user_id": "org1"}, {"user_id": "p1"}])
 
         from app.services.event_service import _update_event_side_effects
@@ -716,11 +734,13 @@ class TestCancelEventNotifications:
         events_chain = MagicMock()
         events_chain.update.return_value = events_chain
         events_chain.eq.return_value = events_chain
+        events_chain.is_.return_value = events_chain
 
         participants_chain = MagicMock()
         participants_chain.select.return_value = participants_chain
         participants_chain.delete.return_value = participants_chain
         participants_chain.eq.return_value = participants_chain
+        participants_chain.is_.return_value = participants_chain
         participants_chain.execute.return_value = MagicMock(data=[{"user_id": "p1"}])
 
         _stub_tables(mock_sb, {"events": events_chain, "event_participants": participants_chain})
@@ -993,6 +1013,7 @@ class TestEventServiceUnchangedByOrganizers:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.single.return_value = chain
         chain.execute.return_value = MagicMock(data=event)
 
@@ -1011,6 +1032,7 @@ class TestEventServiceUnchangedByOrganizers:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.gte.return_value = chain
         chain.gt.return_value = chain
         chain.ilike.return_value = chain
@@ -1060,6 +1082,7 @@ class TestEventServiceUnchangedByOrganizers:
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
         chain.eq.return_value = chain
+        chain.is_.return_value = chain
         chain.order.return_value = chain
         chain.execute.return_value = MagicMock(data=rows)
 
@@ -1092,11 +1115,13 @@ class TestGetProfileEvents:
         events_chain = MagicMock()
         events_chain.select.return_value = events_chain
         events_chain.eq.return_value = events_chain
+        events_chain.is_.return_value = events_chain
         events_chain.execute.return_value = MagicMock(data=organized)
 
         part_chain = MagicMock()
         part_chain.select.return_value = part_chain
         part_chain.eq.return_value = part_chain
+        part_chain.is_.return_value = part_chain
         part_chain.execute.return_value = MagicMock(data=joined_rows)
 
         chains = {"events": events_chain, "event_participants": part_chain}

@@ -73,7 +73,10 @@ def _load_upcoming_event(event_id: str) -> dict:
     except ValueError:
         raise invitation_error(404, "event_not_found", "Event not found.")
 
-    resp = supabase.table("events").select(EVENT_COLUMNS).eq("id", event_id).limit(1).execute()
+    resp = (
+        supabase.table("events").select(EVENT_COLUMNS).eq("id", event_id)
+        .is_("removed_at", "null").limit(1).execute()
+    )
     if not resp.data:
         raise invitation_error(404, "event_not_found", "Event not found.")
 
@@ -202,14 +205,17 @@ def _notify_invitee(invitation: dict, event: dict) -> None:
 
 
 def _purge_stale_invitations(user_id: str) -> None:
-    """Delete the user's invitations to events that have started or were cancelled."""
+    """Delete the user's invitations to events that have started, were cancelled or were removed by an administrator (#236)."""
     resp = (
         supabase.table("event_invitations")
-        .select("id, events(start_datetime, status)")
+        .select("id, events(start_datetime, status, removed_at)")
         .eq("invitee_id", user_id)
         .execute()
     )
-    stale = [row["id"] for row in resp.data or [] if not _is_upcoming(_single(row.get("events")) or {})]
+    stale = [
+        row["id"] for row in resp.data or []
+        if not _is_upcoming(_single(row.get("events")) or {}) or (_single(row.get("events")) or {}).get("removed_at")
+    ]
     if stale:
         supabase.table("event_invitations").delete().in_("id", stale).execute()
 

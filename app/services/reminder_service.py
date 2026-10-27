@@ -39,6 +39,7 @@ def _get_upcoming_events() -> list[dict]:
         supabase.table("events")
         .select("*")
         .eq("status", "active")
+        .is_("removed_at", "null")
         .gte("start_datetime", window_start.isoformat())
         .lte("start_datetime", window_end.isoformat())
         .execute()

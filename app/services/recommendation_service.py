@@ -4,6 +4,7 @@ from app.utils.embedding_helper import generate_embedding
 from fastapi import HTTPException
 from datetime import datetime, timezone
 from app.services.block_visibility import filter_hidden_events
+from app.services.removed_content import filter_removed_events
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +185,7 @@ def get_recommendations(user_id: str, limit: int = 10) -> dict:
         and event.get("status") == "active"
     ]
     # Over-fetched above, so hiding blocked organizers' events still leaves a full page.
+    results = filter_removed_events(results)
     results = filter_hidden_events(results, user_id)[:limit]
 
     return {

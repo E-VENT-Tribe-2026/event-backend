@@ -320,7 +320,7 @@ class TestLikePatterns:
 
 def _query_chain(data=None, count=0):
     chain = MagicMock()
-    for name in ("select", "eq", "neq", "gte", "gt", "lt", "ilike", "order", "range"):
+    for name in ("select", "eq", "neq", "gte", "gt", "lt", "ilike", "order", "range", "is_"):
         getattr(chain, name).return_value = chain
     chain.execute.return_value = MagicMock(data=data or [], count=count)
     return chain

@@ -83,10 +83,11 @@ class TestParticipantRoutesRequireVerifiedAuth:
         assert res.status_code in (401, 403)
         mock_get_participants.assert_not_called()
 
+    @patch("app.api.v1.participant_routes.get_event")
     @patch("app.api.v1.participant_routes.get_participants_for_viewer")
     @patch("app.api.v1.participant_routes.get_event_participants")
     @patch("app.core.dependencies.supabase")
-    def test_verified_token_returns_participants(self, mock_sb, mock_get_participants, mock_for_viewer):
+    def test_verified_token_returns_participants(self, mock_sb, mock_get_participants, mock_for_viewer, _event):
         mock_sb.auth.get_user.return_value = SimpleNamespace(user=SimpleNamespace(id="u1"))
         mock_get_participants.return_value = [{"user_id": "u2"}, {"user_id": "u3"}]
         mock_for_viewer.return_value = [{"user_id": "u2"}, {"user_id": "u3"}]
