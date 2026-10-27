@@ -4,7 +4,8 @@ Removing invitations when the invited user joins, when the event is cancelled an
 when a friendship ends is done by database triggers (see the migration
 20261012120000_event_invitations.sql). Deleting an invitation also deletes its
 notification (notifications.invitation_id ... on delete cascade).
-Invitations to events that have started are hidden here and cleaned up on read.
+Invitations to events that have started are hidden here and cleaned up on read, and
+purge_started_invitations() removes them for everyone on a schedule (#207).
 """
 import logging
 from datetime import datetime, timezone
@@ -219,6 +220,37 @@ def _purge_stale_invitations(user_id: str) -> None:
     if stale:
         supabase.table("event_invitations").delete().in_("id", stale).execute()
 
+PURGE_BATCH_SIZE = 500
+
+
+def purge_started_invitations() -> int:
+    """Delete every invitation to an event that has started, with its notification (#207).
+
+    Run on a schedule so invitations disappear without the invited user doing anything.
+    Notifications go with them through notifications.invitation_id ... on delete cascade.
+    Returns how many invitations were deleted. Anything left over is caught by the next run.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    resp = (
+        supabase.table("event_invitations")
+        .select("id, events!inner(start_datetime)")
+        .lte("events.start_datetime", now)
+        .limit(PURGE_BATCH_SIZE)
+        .execute()
+    )
+    ids = [row["id"] for row in resp.data or []]
+    if ids:
+        supabase.table("event_invitations").delete().in_("id", ids).execute()
+        logger.info("Purged %d invitations to started events", len(ids))
+    return len(ids)
+
+
+def run_invitation_purge() -> None:
+    """Scheduler entry point: never raises, so one failed run cannot stop the scheduler."""
+    try:
+        purge_started_invitations()
+    except Exception:
+        logger.error("Invitation purge failed", exc_info=True)
 
 # ---------- public functions ----------
 

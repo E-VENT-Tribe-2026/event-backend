@@ -16,6 +16,11 @@ def trigger_reminders(x_cron_secret: str = Header(default=None)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     from app.services.reminder_service import send_event_reminders
+    from app.services.invitation_service import run_invitation_purge
+
+    # #207: the hourly Render cron also clears invitations to started events, in case
+    # the in-process scheduler was asleep (free Render instances spin down).
+    run_invitation_purge()
     try:
         send_event_reminders()
         return {"status": "ok", "message": "Reminder job completed"}

@@ -112,6 +112,13 @@ def create_notification(
 
 
 def get_notifications(user_id: str, page: int = 1, limit: int = 10):
+    # #207: drop this user's invitations to started events first, so their
+    # notifications never show between two scheduled purges. Never blocks the list.
+    try:
+        from app.services.invitation_service import _purge_stale_invitations
+        _purge_stale_invitations(user_id)
+    except Exception:
+        logger.error("Invitation cleanup before notifications failed", exc_info=True)
     start = (page - 1) * limit
     end = start + limit - 1
 
