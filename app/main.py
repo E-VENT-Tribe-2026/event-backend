@@ -14,6 +14,8 @@ from app.core.jwt_middleware import JWTMiddleware
 from app.db.database import engine, Base
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
+from app.services.reminder_service import send_event_reminders
+from app.services.invitation_service import run_invitation_purge
 
 load_dotenv()
 
@@ -38,6 +40,8 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
     # Poll every hour; reminder window is 12-13 h before start so each event is caught once
     scheduler.add_job(send_event_reminders, "interval", hours=1, id="event_reminders")
+        # #207: remove invitations (and their notifications) once their event has started
+    scheduler.add_job(run_invitation_purge, "interval", minutes=5, id="invitation_purge")
     scheduler.start()
     logger.info("Reminder scheduler started.")
 
