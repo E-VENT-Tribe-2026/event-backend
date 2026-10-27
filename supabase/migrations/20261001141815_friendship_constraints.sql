@@ -1,5 +1,5 @@
 -- ====================================================================
--- Migration: Friendship Constraints & Notifications Link
+-- Migration: Friendship Constraints & Notifications Link (Issue #181)
 -- ====================================================================
 
 -- 1. Ensure `friend_requests` table exists and matches ERD schema
@@ -26,7 +26,7 @@ BEGIN
     END IF;
 
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'friend_requests_no_self'
+        SELECT 1 FROM pg_constraint WHERE conname IN ('friend_requests_no_self', 'friend_requests_not_self')
     ) THEN
         ALTER TABLE friend_requests 
             ADD CONSTRAINT friend_requests_no_self 
@@ -36,9 +36,19 @@ END;
 $$;
 
 -- Prevent two pending friend requests between the same two users in EITHER direction
-CREATE UNIQUE INDEX IF NOT EXISTS unique_pending_friend_request
-ON friend_requests (LEAST(initiator_id, receiver_id), GREATEST(initiator_id, receiver_id))
-WHERE status = 'pending';
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes 
+        WHERE tablename = 'friend_requests' 
+          AND indexname IN ('unique_pending_friend_request', 'friend_requests_one_pending_per_pair')
+    ) THEN
+        CREATE UNIQUE INDEX unique_pending_friend_request
+        ON friend_requests (LEAST(initiator_id, receiver_id), GREATEST(initiator_id, receiver_id))
+        WHERE status = 'pending';
+    END IF;
+END;
+$$;
 
 -- Index for receiver lookup
 CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver 
@@ -59,7 +69,7 @@ CREATE TABLE IF NOT EXISTS friendships (
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'friendships_no_self'
+        SELECT 1 FROM pg_constraint WHERE conname IN ('friendships_no_self', 'friendships_not_self')
     ) THEN
         ALTER TABLE friendships 
             ADD CONSTRAINT friendships_no_self 
@@ -69,16 +79,27 @@ END;
 $$;
 
 -- Prevent the same friendship from being stored twice (in either direction)
-CREATE UNIQUE INDEX IF NOT EXISTS unique_friendship_pair
-ON friendships (LEAST(user_id, friend_id), GREATEST(user_id, friend_id));
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes 
+        WHERE tablename = 'friendships' 
+          AND indexname IN ('unique_friendship_pair', 'friendships_one_per_pair')
+    ) THEN
+        CREATE UNIQUE INDEX unique_friendship_pair
+        ON friendships (LEAST(user_id, friend_id), GREATEST(user_id, friend_id));
+    END IF;
+END;
+$$;
 
 -- Indexes so friendships can be found starting from either user
 CREATE INDEX IF NOT EXISTS idx_friendships_user_id ON friendships (user_id);
 CREATE INDEX IF NOT EXISTS idx_friendships_friend_id ON friendships (friend_id);
 
 
--- 3. Update `notifications` table to point to a user and friend request
+-- 3. Update `notifications` table to point to a user, actor, and friend request
 ALTER TABLE notifications 
+    ADD COLUMN IF NOT EXISTS related_user_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS actor_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
     ADD COLUMN IF NOT EXISTS friend_request_id BIGINT REFERENCES friend_requests(id) ON DELETE CASCADE;
 
