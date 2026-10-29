@@ -278,6 +278,31 @@ class TestSendFriendRequest:
         assert exc.value.detail["code"] == "already_friends"
         m["create_notification"].assert_not_called()
 
+    @pytest.mark.parametrize("sender_blocked_receiver, status, code", [
+        (False, 404, "user_not_found"),   # receiver blocked the sender meanwhile
+        (True, 403, "user_blocked"),      # sender blocked the receiver meanwhile
+    ])
+    def test_trigger_users_blocked_after_checks(self, sender_blocked_receiver, status, code):
+        """#227: a block that lands between the checks and the insert is refused by the trigger."""
+        mock_sb, chains = make_table_router()
+        chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
+
+        class TriggerError(Exception):
+            code = "P0001"
+            message = "users_blocked"
+
+        chains["friend_requests"].execute.side_effect = [TriggerError("users_blocked")]
+        with svc(mock_sb, state=True) as m, patch(f"{MOD}.has_blocked") as has_blocked:
+            # Two checks before the insert pass; the re-check after the trigger error sees the block.
+            has_blocked.side_effect = [False, False, sender_blocked_receiver]
+            m["get_friendship_state"].return_value = {"status": "none", "request_id": None}
+            from app.services.friendship_service import send_friend_request
+            with pytest.raises(HTTPException) as exc:
+                send_friend_request(ME, OTHER)
+        assert exc.value.status_code == status
+        assert exc.value.detail["code"] == code
+        m["create_notification"].assert_not_called()
+
     def test_other_insert_error_is_send_failed_500(self):
         mock_sb, chains = make_table_router()
         chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
