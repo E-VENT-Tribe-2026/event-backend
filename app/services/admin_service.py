@@ -825,6 +825,17 @@ def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_t
 
     return cancelled_events_count, joined_events_removed_count
 
+def revoke_user_sessions(user_id: str) -> int:
+    """
+    End every session of a user (#228): their refresh tokens stop working, and their
+    access tokens are refused by supabase.auth.get_user() because the session is gone.
+    Uses the revoke_user_sessions SQL function (Supabase Auth has no admin route to sign
+    out another user). Raises if the function fails or is missing.
+    """
+    resp = supabase.rpc("revoke_user_sessions", {"p_user_id": str(user_id)}).execute()
+    data = getattr(resp, "data", None)
+    return data if isinstance(data, int) else 0
+
 def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     """
     Grants the administrator role to an account that is not an administrator,
@@ -879,6 +890,17 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not re-assert service key on postgrest client: {e}")
 
+        # End their sessions before changing anything: if that is not possible, refuse
+    # and leave the account untouched, so the request can simply be retried (#228).
+    try:
+        revoke_user_sessions(actual_target_id)
+    except Exception as e:
+        logger.error(f"Could not revoke sessions for user {actual_target_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not end the user's sessions. The account was not changed.",
+        )
+    
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
 
@@ -953,19 +975,13 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         logger.error(f"Failed to update profile to administrator for {actual_target_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant administrator role.")
 
-    # 11. End their sessions at once
+    # 11. End their sessions again: catches a sign-in made while the steps above ran (#228)
+    sessions_revoked = True
     try:
-        from app.core.config import settings
-        import requests
-        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-            logout_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{actual_target_id}/logout"
-            headers = {
-                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-                "apikey": settings.SUPABASE_SERVICE_KEY,
-            }
-            requests.post(logout_url, headers=headers, timeout=5)
+        revoke_user_sessions(actual_target_id)
     except Exception as e:
-        logger.warning(f"Could not revoke sessions for user {actual_target_id}: {e}")
+        sessions_revoked = False
+        logger.error(f"Could not revoke sessions after promotion for user {actual_target_id}: {e}")
 
     # 12. Record in audit log
     summary_dict = {
@@ -977,6 +993,7 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         "saved_events_deleted": True,
         "notifications_deleted": True,
         "profile_purged": True,
+        "sessions_revoked": sessions_revoked,
     }
     try:
         audit_entry = {
@@ -991,6 +1008,13 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not write audit log for user {actual_target_id}: {e}")
 
+    # Never report success while old sessions may still work (#228).
+    if not sessions_revoked:
+        raise HTTPException(
+            status_code=500,
+            detail="The account was made an administrator, but its sessions could not be ended.",
+        )
+    
     return {
         "message": "User made administrator successfully.",
         "user_id": actual_target_id,
