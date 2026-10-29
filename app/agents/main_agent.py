@@ -14,7 +14,8 @@ MAIN_AGENT_PROMPT = (
     "3. Entity Tracking & Tool Selection: When the user wants to perform an action, determine the appropriate tool and parameters:\n"
     "   - search_events: To find, search, or list events (parameters: query, category, city, date, upcoming: boolean [MUST be false if user asks for 'all events', searches by a specific event name or keyword, or asks for past events; set to true ONLY if user explicitly asks for 'upcoming' or 'future' events], page, limit).\n"
     "   - get_event_details: To retrieve details for a specific event (parameter: event_id in UUID format).\n"
-    "   - draft_new_event: To draft/preview a new event (parameters: title, start_datetime, end_datetime, description, category, cost, max_capacity, location_name, latitude, longitude). Note: You only draft previews; events are never published autonomously.\n\n"
+    "   - draft_new_event: To draft/preview a new event (parameters: title, start_datetime, end_datetime, description, category, cost, max_capacity, location_name, latitude, longitude). Note: You only draft previews; events are never published autonomously.\n"
+    "   - If a current event draft is shown below and the user adds or changes a field, call draft_new_event with only the fields that changed. The server merges them onto that draft. Do not leave the change only in prose.\n\n"
     "Response Format Guidelines:\n"
     "- If you decide to invoke a tool, output a tool call block in the following exact format:\n"
     "```tool_call\n"
@@ -45,7 +46,15 @@ class MainAgent:
 
         # Build prompt messages for the LLM
         messages = state.get("messages", [])
-        prompt_messages = [{"role": "system", "content": MAIN_AGENT_PROMPT}]
+        system_prompt = MAIN_AGENT_PROMPT
+        slots = state.get("entity_slots") or {}
+        if slots:
+            system_prompt += (
+                "\n\nCurrent event draft:\n"
+                + json.dumps(slots)
+                + "\nApply the user's latest change by calling draft_new_event with only the fields that changed."
+            )
+        prompt_messages = [{"role": "system", "content": system_prompt}]
         prompt_messages.extend(messages)
 
         # Call the LLM to perform intent classification, clarification, or tool dispatch

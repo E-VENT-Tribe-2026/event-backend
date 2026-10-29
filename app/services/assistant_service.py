@@ -70,24 +70,46 @@ def call_llm(messages: list[dict[str, str]]) -> str:
         ) from None
 
 
-def run_agent_workflow(messages: list[Any], user_id: Optional[str] = None) -> AgentState:
+def run_agent_workflow(
+    messages: list[Any],
+    user_id: Optional[str] = None,
+    draft: Optional[dict] = None,
+) -> AgentState:
     """Execute the multi-turn 2-agent LangGraph workflow."""
     graph = get_agent_graph()
     raw_messages = [
         m.model_dump() if hasattr(m, "model_dump") else (dict(m) if not isinstance(m, dict) else m)
         for m in messages
     ]
+    from app.agents.tools import merge_draft
+
     initial_state: AgentState = {
         "messages": raw_messages,
         "user_id": user_id,
-        "entity_slots": {},
+        "entity_slots": merge_draft({}, draft),
         "input_guard_passed": False,
         "output_guard_passed": False,
     }
     return graph.invoke(initial_state)
 
 
-def generate_reply(messages: list[AssistantMessage]) -> str:
+def _issue_messages(issues: Any) -> list[str]:
+    messages: list[str] = []
+    if not isinstance(issues, list):
+        return messages
+    for issue in issues:
+        if isinstance(issue, str) and issue.strip():
+            messages.append(issue.strip())
+        elif isinstance(issue, dict) and issue.get("message"):
+            messages.append(str(issue["message"]))
+    return messages
+
+
+def generate_reply(
+    messages: list[AssistantMessage],
+    user_id: Optional[str] = None,
+    draft: Optional[dict] = None,
+) -> dict[str, Any]:
     """Generate assistant reply using the 2-agent LangGraph pipeline."""
     if not settings.GEMINI_API_KEY:
         raise HTTPException(
@@ -96,5 +118,13 @@ def generate_reply(messages: list[AssistantMessage]) -> str:
         )
 
     raw_messages = [message.model_dump() for message in messages]
-    result_state = run_agent_workflow(raw_messages)
-    return result_state.get("reply", "")
+    viewer_id = str(user_id).strip() if user_id else None
+    result_state = run_agent_workflow(raw_messages, user_id=viewer_id or None, draft=draft)
+    payload: dict[str, Any] = {"reply": result_state.get("reply") or ""}
+    metadata = result_state.get("metadata") or {}
+    if metadata.get("type") == "draft_event_preview" and isinstance(metadata.get("draft"), dict):
+        payload["draft"] = metadata["draft"]
+    issues = _issue_messages(metadata.get("validation_issues"))
+    if issues:
+        payload["validation_issues"] = issues
+    return payload

@@ -16,14 +16,14 @@ from app.services.event_search_service import search_events
 router = APIRouter()
 
 
-@router.post("/chat", response_model=AssistantChatResponse)
-def chat(body: AssistantChatRequest, _user=Depends(get_current_user)):
-    return AssistantChatResponse(reply=generate_reply(body.messages))
+@router.post("/chat", response_model=AssistantChatResponse, response_model_exclude_none=True)
+def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
+    return generate_reply(body.messages, getattr(user, "id", None), body.draft)
 
 
 @router.post("/tools/search-events", response_model=SearchEventsResponse)
-def search_events_tool(body: Any = Body(...), _user=Depends(get_current_user)):
-    return search_events(body)
+def search_events_tool(body: Any = Body(...), user=Depends(get_current_user)):
+    return search_events(body, getattr(user, "id", None))
 
 
 @router.post("/tools/event-details", response_model=EventDetailsResponse)

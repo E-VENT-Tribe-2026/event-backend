@@ -5,7 +5,7 @@ from langgraph.graph import StateGraph, START, END
 from app.agents.state import AgentState
 from app.agents.guardian import GuardianAgent
 from app.agents.main_agent import MainAgent
-from app.agents.tools import TOOL_REGISTRY
+from app.agents.tools import TOOL_REGISTRY, merge_draft
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,8 @@ def tools_node(state: AgentState) -> AgentState:
     tool_name = state.get("tool_name")
     # The signed-in user comes from the request, never from what the model put in the tool input.
     tool_input = {k: v for k, v in (state.get("tool_input") or {}).items() if k != "user_id"}
+    if tool_name == "draft_new_event":
+        tool_input = merge_draft(state.get("entity_slots"), tool_input)
     if state.get("user_id"):
         tool_input["user_id"] = state["user_id"]
     print(f"⚙️  [ToolsNode] Executing tool: '{tool_name}'...")

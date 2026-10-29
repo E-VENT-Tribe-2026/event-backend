@@ -176,10 +176,19 @@ def test_tool_search_events():
 
 def test_tool_get_event_details():
     with patch("app.services.event_details_service._fetch_event", return_value=None):
-        res = tool_get_event_details({"event_id": "11111111-1111-1111-1111-111111111111"})
+        res = tool_get_event_details({
+            "event_id": "11111111-1111-1111-1111-111111111111",
+            "user_id": "22222222-2222-2222-2222-222222222222",
+        })
         assert "request_id" in res
         assert res["success"] is False
         assert res["error"]["code"] == "NOT_FOUND"
+
+
+def test_tool_get_event_details_requires_the_signed_in_user():
+    res = tool_get_event_details({"event_id": "11111111-1111-1111-1111-111111111111"})
+    assert res["success"] is False
+    assert res["error"]["code"] == "UNAUTHORIZED"
 
 
 def test_tool_draft_new_event():
@@ -210,6 +219,28 @@ def test_full_pipeline_blocks_malicious_request_at_input_gate():
     assert not result.get("tool_executed", False)
 
 
+def test_pipeline_search_uses_the_signed_in_viewer_and_ignores_a_model_user_id():
+    viewer = "11111111-1111-1111-1111-111111111111"
+    other = "22222222-2222-2222-2222-222222222222"
+    tool_response = (
+        "```tool_call\n"
+        '{"tool": "search_events", "parameters": {"city": "Berlin", "user_id": "' + other + '"}}\n'
+        "```"
+    )
+    empty = {"success": True, "events": [], "error": None}
+    with patch("app.services.assistant_service.call_llm", return_value=tool_response), patch(
+        "app.services.event_search_service.search_events", return_value=empty
+    ) as search:
+        result = run_agent_workflow(
+            [{"role": "user", "content": "Search for music events in Berlin"}],
+            user_id=viewer,
+        )
+
+    assert result["tool_executed"] is True
+    assert search.call_args.args[0] == {"city": "Berlin"}
+    assert search.call_args.args[1] == viewer
+
+
 def test_full_pipeline_runs_tool_workflow():
     tool_response = (
         "```tool_call\n"
@@ -225,6 +256,33 @@ def test_full_pipeline_runs_tool_workflow():
     assert result["tool_executed"] is True
     assert "didn't find any active listings" in result["reply"]
     assert result["metadata"]["type"] == "event_search_results"
+
+
+def test_draft_clarification_merges_onto_the_current_draft():
+    current = {
+        "title": "Jazz Night",
+        "start_datetime": "2026-11-20T18:00:00Z",
+        "end_datetime": "2026-11-20T21:00:00Z",
+        "location_name": "Berlin",
+    }
+    tool_response = (
+        "```tool_call\n"
+        '{"tool": "draft_new_event", "parameters": {"location_name": "Prague", "user_id": "99999999-9999-9999-9999-999999999999"}}\n'
+        "```"
+    )
+    with patch("app.services.assistant_service.call_llm", return_value=tool_response):
+        result = run_agent_workflow(
+            [{"role": "user", "content": "Move the draft to Prague"}],
+            user_id="11111111-1111-1111-1111-111111111111",
+            draft=current,
+        )
+
+    draft = result["metadata"]["draft"]
+    assert draft["title"] == "Jazz Night"
+    assert draft["location_name"] == "Prague"
+    assert draft["start_datetime"] == "2026-11-20T18:00:00Z"
+    assert draft["end_datetime"] == "2026-11-20T21:00:00Z"
+    assert "user_id" not in draft
 
 
 def test_full_pipeline_runs_draft_event_preview_workflow():
