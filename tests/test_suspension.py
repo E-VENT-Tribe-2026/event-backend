@@ -28,7 +28,8 @@ E_UP, E_PAST = "00000000-0000-4000-8000-0000000000e1", "00000000-0000-4000-8000-
 E_OTHER_UP, E_OTHER_PAST = "00000000-0000-4000-8000-0000000000e3", "00000000-0000-4000-8000-0000000000e4"
 
 MODULES = ["admin_service", "warning_service", "audit_service", "notification_service", "profile_service",
-           "suspension_service", "friendship_service", "block_visibility", "chat_service"]
+           "suspension_service", "friendship_service", "block_visibility", "chat_service",
+           "admin_report_history_service"]
 client = TestClient(app)
 current = {"id": ADM}
 

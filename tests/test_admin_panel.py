@@ -204,11 +204,19 @@ class TestAdminPanel:
             app.dependency_overrides.pop(require_admin, None)
 
     # 5. User details with organized and joined events
+    @patch("app.services.admin_report_history_service.supabase")
     @patch("app.services.warning_service.supabase")
     @patch("app.services.admin_service.supabase")
-    def test_get_admin_user_details(self, mock_sb, _mock_warnings_sb):
+    def test_get_admin_user_details(self, mock_sb, _mock_warnings_sb, mock_history_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
+            # #235: the report history reads its tables through its own client; here the user has no reports.
+            history_chain = MagicMock()
+            for step in ("select", "eq", "in_", "order", "range"):
+                getattr(history_chain, step).return_value = history_chain
+            history_chain.execute.return_value = MagicMock(data=[], count=0)
+            mock_history_sb.table.return_value = history_chain
+
             now = datetime.now(timezone.utc)
             future_iso = (now + timedelta(days=2)).isoformat()
             past_iso = (now - timedelta(days=2)).isoformat()
@@ -579,10 +587,18 @@ class TestAdminPanel:
         assert "Forbidden" in res.json()["detail"]
 
     # 10. Administrator Account Details Endpoint
+    @patch("app.services.admin_report_history_service.supabase")
     @patch("app.services.admin_service.supabase")
-    def test_get_admin_account_details(self, mock_sb):
+    def test_get_admin_account_details(self, mock_sb, mock_history_sb):
         app.dependency_overrides[require_admin] = lambda: MockAdminUser()
         try:
+            # #235: the closed-reports count reads the reports table through its own client; here: none closed.
+            history_chain = MagicMock()
+            for step in ("select", "eq", "limit"):
+                getattr(history_chain, step).return_value = history_chain
+            history_chain.execute.return_value = MagicMock(data=[], count=0)
+            mock_history_sb.table.return_value = history_chain
+
             chain = MagicMock()
             chain.select.return_value = chain
             chain.eq.return_value = chain
