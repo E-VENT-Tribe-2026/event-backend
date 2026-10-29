@@ -22,7 +22,8 @@ V = "22222222-2222-4222-8222-222222222222"
 W = "33333333-3333-4333-8333-333333333333"
 X = "44444444-4444-4444-8444-444444444444"
 
-MODULES = ["admin_service", "warning_service", "audit_service", "notification_service", "profile_service"]
+MODULES = ["admin_service", "warning_service", "audit_service", "notification_service", "profile_service",
+           "admin_report_history_service"]
 client = TestClient(app)
 current = {"id": U}
 

@@ -31,7 +31,7 @@ SERVICE_MODULES = [
     "content_removal_service", "warning_service", "audit_service", "notification_service",
     "removed_content", "event_service", "chat_service", "admin_service", "saved_event_service",
     "participant_service", "event_search_service", "event_details_service", "recommendation_service",
-    "profile_service", "invitation_service", "report_service",
+    "profile_service", "invitation_service", "report_service", "admin_report_history_service",
 ]
 
 client = TestClient(app)

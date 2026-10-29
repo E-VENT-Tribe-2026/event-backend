@@ -1,5 +1,6 @@
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.admin_report_schema import ReportHistory
 from app.schemas.warning_schema import PersonSummary
 
 
@@ -114,6 +115,7 @@ class AdminAccountResponse(BaseModel):
     icon_id: Optional[str] = None
     admin_since: Optional[str] = None
     role: str = "administrator"
+    reports_closed: int = 0
 
     model_config = ConfigDict(extra="ignore")
 
@@ -143,6 +145,7 @@ class AdminUserDetailResponse(BaseModel):
     friends: List[PersonSummary] = []
     blocked_users: List[PersonSummary] = []
     blocked_by: List[PersonSummary] = []
+    report_history: Optional[ReportHistory] = None  # null for an administrator account
 
     model_config = ConfigDict(extra="ignore")
 

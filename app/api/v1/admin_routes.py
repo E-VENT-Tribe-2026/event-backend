@@ -28,6 +28,14 @@ from app.services.admin_service import (
     get_admin_event_details,
     grant_admin_role,
 )
+from app.schemas.admin_report_schema import (
+    AdminReportDetailResponse,
+    AdminReportListResponse,
+    AdminReportOpenListResponse,
+    ReportActionRequest,
+)
+from app.services.admin_report_service import get_report_details, list_open_reports, list_reports
+from app.services.admin_report_action_service import act_on_report, dismiss_report
 from app.schemas.warning_schema import (
     GiveWarningRequest,
     WarningHistoryItem,
@@ -329,3 +337,62 @@ def post_lift_suspension(
 ):
     """Lifts a suspension with a written reason and emails the user. Cancelled events stay cancelled."""
     return lift_suspension(user_id=user_id, admin_id=admin.id, reason=body.reason)
+
+
+@router.get("/reports/open", response_model=AdminReportOpenListResponse)
+@_slash("/reports/open", ["GET"], response_model=AdminReportOpenListResponse)
+def get_open_reports(admin=Depends(require_admin)):
+    """Every open report with the number of them, newest first. Not paged."""
+    return list_open_reports()
+
+
+@router.get("/reports", response_model=AdminReportListResponse)
+@router.get("/reports/", response_model=AdminReportListResponse, include_in_schema=False)
+def get_reports(
+    page: int = Query(1, ge=1, le=10000, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    admin=Depends(require_admin),
+):
+    """Every report, open or closed, in pages, newest first."""
+    return list_reports(page=page, limit=limit)
+
+
+# Must stay BELOW /reports/open, or FastAPI reads "open" as a report id.
+@router.get("/reports/{report_id}", response_model=AdminReportDetailResponse)
+@_slash("/reports/{report_id}", ["GET"], response_model=AdminReportDetailResponse)
+def get_report(
+    report_id: int = Path(..., le=9223372036854775807, description="Target report identifier"),
+    admin=Depends(require_admin),
+):
+    """
+    Returns a report's details: who reported what and why, the description, the chat context
+    when it was sent from a chat, the outcome and who closed it, and whether the reported
+    content is removed and the reported person is an administrator right now.
+    """
+    return get_report_details(report_id=report_id)
+
+
+@router.post("/reports/{report_id}/dismiss", response_model=AdminReportDetailResponse)
+@_slash("/reports/{report_id}/dismiss", ["POST"], response_model=AdminReportDetailResponse)
+def post_dismiss_report(
+    report_id: int = Path(..., le=9223372036854775807, description="Report to dismiss"),
+    admin=Depends(require_admin),
+):
+    """Closes an open report without any action. Refused when the report is already closed."""
+    return dismiss_report(report_id=report_id, admin_id=admin.id)
+
+
+@router.post("/reports/{report_id}/action", response_model=AdminReportDetailResponse)
+@_slash("/reports/{report_id}/action", ["POST"], response_model=AdminReportDetailResponse)
+def post_report_action(
+    body: ReportActionRequest,
+    background_tasks: BackgroundTasks,
+    report_id: int = Path(..., le=9223372036854775807, description="Report to act on"),
+    admin=Depends(require_admin),
+):
+    """
+    Acts on an open report: warn or suspend the reported user (for an event, its organizer), or remove
+    the reported event or message. A reason is required for warn and suspend. Closes the report.
+    """
+    return act_on_report(report_id=report_id, admin_id=admin.id, action=body.action, reason=body.reason,
+                         background_tasks=background_tasks)

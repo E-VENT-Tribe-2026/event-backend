@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.services.admin_report_history_service import report_history, reports_closed
 from app.utils.query_safety import like_contains
 
 logger = logging.getLogger(__name__)
@@ -490,6 +491,7 @@ def get_admin_user_details(user_id: str) -> dict:
         "suspension_reason": None if is_admin else profile.get("suspension_reason"),
         "warning_count": warning_count,
         **({"friends": [], "blocked_users": [], "blocked_by": []} if is_admin else _relations_of(user_id)),
+        "report_history": None if is_admin else report_history(user_id),
     }
 
 
@@ -531,6 +533,7 @@ def get_admin_account_details(admin_id: str) -> dict:
         "icon_id": p.get("icon_id"),
         "admin_since": _as_text(p.get("admin_since")),
         "role": p.get("role") or "administrator",
+        "reports_closed": reports_closed(admin_id),
     }
 
 
