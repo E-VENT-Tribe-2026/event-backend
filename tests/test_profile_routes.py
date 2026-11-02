@@ -244,3 +244,69 @@ class TestProfileSearchAndPublicRoutes:
     def test_get_public_profile_requires_authentication(self):
         response = client.get(f"/api/profile/{PROFILE_UUID}")
         assert response.status_code in (401, 403)
+
+
+
+TARGET_UUID = "223e4567-e89b-12d3-a456-426614174001"
+VIEWER_UUID = "323e4567-e89b-12d3-a456-426614174002"
+
+
+class RegularViewer:
+    id = VIEWER_UUID
+    email = "viewer@test.com"
+
+
+class TestUserFriendsBlocking:
+    """#226: the friends-list endpoint must respect blocks in both directions."""
+
+    def setup_method(self):
+        from app.core.dependencies import require_regular_user
+        app.dependency_overrides[require_regular_user] = lambda: RegularViewer()
+
+    def teardown_method(self):
+        from app.core.dependencies import require_regular_user
+        app.dependency_overrides.pop(require_regular_user, None)
+
+    @patch("app.api.v1.profile_routes.get_user_friends_summary_page")
+    @patch("app.api.v1.profile_routes.get_friendship_state")
+    @patch("app.api.v1.profile_routes.get_public_profile")
+    @patch("app.api.v1.profile_routes.has_blocked")
+    def test_viewer_who_blocked_target_gets_403_and_no_friends(
+        self, mock_blocked, mock_profile, mock_friendship, mock_friends
+    ):
+        mock_blocked.side_effect = lambda blocker, blocked: (blocker, blocked) == (VIEWER_UUID, TARGET_UUID)
+        mock_profile.return_value = {"id": TARGET_UUID, "visibility": "public"}
+        mock_friendship.return_value = {"status": "none"}
+
+        response = client.get(f"/api/profile/{TARGET_UUID}/friends?page=1&limit=20")
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "friends_list_unavailable"
+        mock_friends.assert_not_called()
+
+    @patch("app.api.v1.profile_routes.get_user_friends_summary_page")
+    @patch("app.api.v1.profile_routes.has_blocked")
+    def test_target_who_blocked_viewer_still_gets_404(self, mock_blocked, mock_friends):
+        mock_blocked.side_effect = lambda blocker, blocked: (blocker, blocked) == (TARGET_UUID, VIEWER_UUID)
+
+        response = client.get(f"/api/profile/{TARGET_UUID}/friends")
+
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "profile_unavailable"
+        mock_friends.assert_not_called()
+
+    @patch("app.api.v1.profile_routes.get_user_friends_summary_page")
+    @patch("app.api.v1.profile_routes.get_friendship_state")
+    @patch("app.api.v1.profile_routes.get_public_profile")
+    @patch("app.api.v1.profile_routes.has_blocked", return_value=False)
+    def test_no_block_public_profile_returns_friends(
+        self, mock_blocked, mock_profile, mock_friendship, mock_friends
+    ):
+        mock_profile.return_value = {"id": TARGET_UUID, "visibility": "public"}
+        mock_friendship.return_value = {"status": "none"}
+        mock_friends.return_value = {"data": [], "page": 1, "limit": 20, "has_more": False}
+
+        response = client.get(f"/api/profile/{TARGET_UUID}/friends?page=1&limit=20")
+
+        assert response.status_code == 200
+        mock_friends.assert_called_once_with(TARGET_UUID, page=1, limit=20, viewer_id=VIEWER_UUID)

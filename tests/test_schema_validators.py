@@ -96,6 +96,7 @@ class TestRegisterRequestValidator:
             "dob": date(1990, 1, 1),
             "gender": "male",
             "interests": [],
+            "invite_code": "ABCD-EFGH",
         }
         payload.update(overrides)
         return payload

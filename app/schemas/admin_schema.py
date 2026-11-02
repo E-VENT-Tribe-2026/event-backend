@@ -1,5 +1,6 @@
 from typing import List, Literal, Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.admin_report_schema import ReportHistory
 from app.schemas.warning_schema import PersonSummary
 
 
@@ -67,6 +68,10 @@ class AdminEventListItem(BaseModel):
     organizer: Optional[AdminEventOrganizerSummary] = None
     banner: Optional[str] = None
     banner_url: Optional[str] = None
+    # #236: removed events stay in the list, marked.
+    is_removed: bool = False
+    removed_at: Optional[str] = None
+    removed_by: Optional[PersonSummary] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -87,6 +92,9 @@ class AdminUserEventItem(BaseModel):
     end_datetime: Optional[str] = None
     status: Optional[str] = None
     is_cancelled: bool = False
+    # #236: an event an administrator removed stays in the list, marked.
+    is_removed: bool = False
+    removed_at: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -107,6 +115,7 @@ class AdminAccountResponse(BaseModel):
     icon_id: Optional[str] = None
     admin_since: Optional[str] = None
     role: str = "administrator"
+    reports_closed: int = 0
 
     model_config = ConfigDict(extra="ignore")
 
@@ -136,6 +145,7 @@ class AdminUserDetailResponse(BaseModel):
     friends: List[PersonSummary] = []
     blocked_users: List[PersonSummary] = []
     blocked_by: List[PersonSummary] = []
+    report_history: Optional[ReportHistory] = None  # null for an administrator account
 
     model_config = ConfigDict(extra="ignore")
 
@@ -182,6 +192,10 @@ class AdminChatMessageItem(BaseModel):
     created_at: Optional[str] = None
     is_system_message: bool = False
     type: Optional[str] = "chat"
+    # #236: an administrator still sees the text of a removed message, marked as removed.
+    is_removed: bool = False
+    removed_at: Optional[str] = None
+    removed_by: Optional[PersonSummary] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -209,6 +223,9 @@ class AdminEventDetailResponse(BaseModel):
     chat: List[AdminChatMessageItem] = []
     banner: Optional[str] = None
     banner_url: Optional[str] = None
+    is_removed: bool = False
+    removed_at: Optional[str] = None
+    removed_by: Optional[PersonSummary] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -230,3 +247,23 @@ class GrantAdminRoleResponse(BaseModel):
     summary: Optional[dict] = None
 
     model_config = ConfigDict(extra="ignore")
+
+
+class RemoveContentRequest(BaseModel):
+    """Optional body of the removal endpoints: the report the removal comes from."""
+    report_id: Optional[int] = Field(None, ge=1, le=9223372036854775807)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RemoveEventResponse(BaseModel):
+    event_id: str
+    is_removed: bool = True
+    removed_at: str
+    removed_by: Optional[PersonSummary] = None
+    report_id: Optional[int] = None
+    warning_id: Optional[int] = None
+
+
+class RemoveMessageResponse(RemoveEventResponse):
+    message_id: int
