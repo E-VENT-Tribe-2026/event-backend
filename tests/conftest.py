@@ -1,3 +1,5 @@
+import os
+os.environ["TESTING"] = "true"
 import pytest
 from unittest.mock import patch
 

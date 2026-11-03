@@ -65,11 +65,30 @@ def _post(payload):
 
 def test_search_requires_authentication():
     app.dependency_overrides.pop(get_current_user, None)
-    try:
-        response = _post({})
-        assert response.status_code in (401, 403)
-    finally:
-        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+    with patch("app.core.dependencies.supabase.auth.get_user", side_effect=Exception("Invalid token")):
+        try:
+            response = _post({})
+            assert response.status_code in (401, 403)
+        finally:
+            app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+
+
+def test_search_forwards_authenticated_user_id():
+    with patch("app.api.v1.assistant_routes.search_events") as mock_search:
+        mock_search.return_value = {
+            "request_id": "test-req",
+            "success": True,
+            "events": [],
+            "pagination": {"page": 1, "limit": 10, "total": 0, "has_next": False},
+            "error": None,
+        }
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="test-caller-id")
+        try:
+            response = _post({"upcoming": True})
+            assert response.status_code == 200
+            mock_search.assert_called_once_with({"upcoming": True}, "test-caller-id")
+        finally:
+            app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
 
 
 def test_combined_filters_pagination_and_ordering():

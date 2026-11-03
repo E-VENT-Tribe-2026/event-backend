@@ -37,13 +37,13 @@ class SearchInputError(Exception):
 def search_events(payload: Any, viewer_id: Optional[str] = None) -> dict:
     """Search active events. With a viewer_id, events organized by users the viewer blocked or
     who blocked the viewer are left out (unless the viewer participates in them)."""
-    print(f"🔍 [search_events] Received payload: {payload}")
+    logger.debug("[search_events] Received payload: %s", payload)
     request_id = str(uuid.uuid4())
     try:
         criteria = _parse_input(payload)
-        print(f"✅ [search_events] Parsed input successfully: {criteria}")
+        logger.debug("[search_events] Parsed input successfully: %s", criteria)
     except SearchInputError as exc:
-        print(f"❌ [search_events] Invalid input: {exc}")
+        logger.debug("[search_events] Invalid input: %s", exc)
         return _failure(request_id, "INVALID_INPUT", exc.message, exc.field)
 
     try:
