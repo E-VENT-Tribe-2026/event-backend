@@ -26,6 +26,14 @@ MAIN_AGENT_PROMPT = (
 
 
 class MainAgent:
+    @classmethod
+    def _get_system_prompt(cls, state: AgentState) -> str:
+        """Return the system prompt, optionally augmented with minimal user context."""
+        user_data = state.get("user")
+        if user_data:
+            return f"{MAIN_AGENT_PROMPT}\n\nAuthenticated User:\n{json.dumps(user_data)}"
+        return MAIN_AGENT_PROMPT
+
     """
     MainAgent powered by LLM reasoning with a single system prompt.
     All intent classification, slot tracking, clarification, and tool decisions
@@ -45,7 +53,7 @@ class MainAgent:
 
         # Build prompt messages for the LLM
         messages = state.get("messages", [])
-        prompt_messages = [{"role": "system", "content": MAIN_AGENT_PROMPT}]
+        prompt_messages = [{"role": "system", "content": cls._get_system_prompt(state)}]
         prompt_messages.extend(messages)
 
         # Call the LLM to perform intent classification, clarification, or tool dispatch
@@ -173,7 +181,7 @@ class MainAgent:
         try:
             messages = state.get("messages", [])
             prompt_messages = [
-                {"role": "system", "content": MAIN_AGENT_PROMPT},
+                {"role": "system", "content": cls._get_system_prompt(state)},
                 *messages,
                 {
                     "role": "system",

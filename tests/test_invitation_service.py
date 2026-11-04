@@ -430,3 +430,78 @@ class TestRoutes:
         assert "invitation" not in anonymous
         assert anonymous["title"] == "Beach Volleyball"
         assert signed_in["invitation"] == summary
+
+
+        
+
+# ---------- purge_started_invitations (#207) ----------
+
+class TestPurgeStartedInvitations:
+    def test_deletes_invitations_to_started_events(self):
+        from app.services.invitation_service import purge_started_invitations
+        mock_sb, chains = make_table_router()
+        chains["event_invitations"].execute.side_effect = [
+            _result([{"id": 4, "events": {"start_datetime": _past()}},
+                     {"id": 7, "events": {"start_datetime": _past(2)}}]),
+            _result([]),  # delete
+        ]
+        with svc(mock_sb):
+            deleted = purge_started_invitations()
+
+        assert deleted == 2
+        # only events whose start is at or before now are selected
+        field, value = chains["event_invitations"].lte.call_args.args
+        assert field == "events.start_datetime"
+        assert datetime.fromisoformat(value) <= datetime.now(timezone.utc)
+        chains["event_invitations"].delete.assert_called_once()
+        chains["event_invitations"].in_.assert_called_once_with("id", [4, 7])
+
+    def test_nothing_to_delete_makes_no_delete_call(self):
+        from app.services.invitation_service import purge_started_invitations
+        mock_sb, chains = make_table_router()
+        chains["event_invitations"].execute.return_value = _result([])
+        with svc(mock_sb):
+            assert purge_started_invitations() == 0
+        chains["event_invitations"].delete.assert_not_called()
+
+    def test_scheduler_entry_point_swallows_errors(self):
+        from app.services.invitation_service import run_invitation_purge
+        with patch(f"{MOD}.purge_started_invitations", side_effect=RuntimeError("db down")):
+            run_invitation_purge()  # must not raise, or the scheduler job dies
+
+
+class TestPurgeIsWired:
+    def test_get_notifications_purges_users_stale_invitations_first(self):
+        from app.services import notification_service
+        mock_sb = MagicMock()
+        chain = mock_sb.table.return_value
+        for m in ("select", "eq", "order", "range"):
+            getattr(chain, m).return_value = chain
+        chain.execute.return_value = _result([])
+        with patch(f"{MOD}._purge_stale_invitations") as purge, \
+             patch.object(notification_service, "supabase", mock_sb):
+            notification_service.get_notifications(ME, 1, 10)
+        purge.assert_called_once_with(ME)
+
+    def test_get_notifications_still_works_when_purge_fails(self):
+        from app.services import notification_service
+        mock_sb = MagicMock()
+        chain = mock_sb.table.return_value
+        for m in ("select", "eq", "order", "range"):
+            getattr(chain, m).return_value = chain
+        chain.execute.return_value = _result([])
+        with patch(f"{MOD}._purge_stale_invitations", side_effect=RuntimeError("db down")), \
+             patch.object(notification_service, "supabase", mock_sb):
+            result = notification_service.get_notifications(ME, 1, 10)
+        assert result["data"] == []
+
+    def test_cron_trigger_runs_purge(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.core.config import settings
+        with patch(f"{MOD}.run_invitation_purge") as purge, \
+             patch("app.services.reminder_service.send_event_reminders"), \
+             patch.object(settings, "CRON_SECRET", "s3cret"):
+            response = TestClient(app).post("/api/reminders/trigger", headers={"x-cron-secret": "s3cret"})
+        assert response.status_code == 200
+        purge.assert_called_once()

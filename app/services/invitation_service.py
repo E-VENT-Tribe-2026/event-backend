@@ -4,7 +4,8 @@ Removing invitations when the invited user joins, when the event is cancelled an
 when a friendship ends is done by database triggers (see the migration
 20261012120000_event_invitations.sql). Deleting an invitation also deletes its
 notification (notifications.invitation_id ... on delete cascade).
-Invitations to events that have started are hidden here and cleaned up on read.
+Invitations to events that have started are hidden here and cleaned up on read, and
+purge_started_invitations() removes them for everyone on a schedule (#207).
 """
 import logging
 from datetime import datetime, timezone
@@ -73,7 +74,10 @@ def _load_upcoming_event(event_id: str) -> dict:
     except ValueError:
         raise invitation_error(404, "event_not_found", "Event not found.")
 
-    resp = supabase.table("events").select(EVENT_COLUMNS).eq("id", event_id).limit(1).execute()
+    resp = (
+        supabase.table("events").select(EVENT_COLUMNS).eq("id", event_id)
+        .is_("removed_at", "null").limit(1).execute()
+    )
     if not resp.data:
         raise invitation_error(404, "event_not_found", "Event not found.")
 
@@ -202,17 +206,51 @@ def _notify_invitee(invitation: dict, event: dict) -> None:
 
 
 def _purge_stale_invitations(user_id: str) -> None:
-    """Delete the user's invitations to events that have started or were cancelled."""
+    """Delete the user's invitations to events that have started, were cancelled or were removed by an administrator (#236)."""
     resp = (
         supabase.table("event_invitations")
-        .select("id, events(start_datetime, status)")
+        .select("id, events(start_datetime, status, removed_at)")
         .eq("invitee_id", user_id)
         .execute()
     )
-    stale = [row["id"] for row in resp.data or [] if not _is_upcoming(_single(row.get("events")) or {})]
+    stale = [
+        row["id"] for row in resp.data or []
+        if not _is_upcoming(_single(row.get("events")) or {}) or (_single(row.get("events")) or {}).get("removed_at")
+    ]
     if stale:
         supabase.table("event_invitations").delete().in_("id", stale).execute()
 
+PURGE_BATCH_SIZE = 500
+
+
+def purge_started_invitations() -> int:
+    """Delete every invitation to an event that has started, with its notification (#207).
+
+    Run on a schedule so invitations disappear without the invited user doing anything.
+    Notifications go with them through notifications.invitation_id ... on delete cascade.
+    Returns how many invitations were deleted. Anything left over is caught by the next run.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    resp = (
+        supabase.table("event_invitations")
+        .select("id, events!inner(start_datetime)")
+        .lte("events.start_datetime", now)
+        .limit(PURGE_BATCH_SIZE)
+        .execute()
+    )
+    ids = [row["id"] for row in resp.data or []]
+    if ids:
+        supabase.table("event_invitations").delete().in_("id", ids).execute()
+        logger.info("Purged %d invitations to started events", len(ids))
+    return len(ids)
+
+
+def run_invitation_purge() -> None:
+    """Scheduler entry point: never raises, so one failed run cannot stop the scheduler."""
+    try:
+        purge_started_invitations()
+    except Exception:
+        logger.error("Invitation purge failed", exc_info=True)
 
 # ---------- public functions ----------
 

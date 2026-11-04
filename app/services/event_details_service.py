@@ -107,6 +107,7 @@ def _fetch_event(event_id: str) -> Optional[dict]:
         supabase.table("events")
         .select(_DETAIL_COLUMNS)
         .eq("id", event_id)
+        .is_("removed_at", "null")
         .limit(1)
         .execute()
     )

@@ -167,7 +167,7 @@ class FakeQuery:
     # ---- run
     def _rows(self):
         rows = self.db.tables.setdefault(self.name, [])
-        if "events" in self.cols and self.name in ("event_participants", "saved_events"):
+        if "events" in self.cols and self.name in ("event_participants", "saved_events", "event_invitations"):
             joined = []
             for row in rows:
                 event = next((e for e in self.db.tables.get("events", []) if e["id"] == row["event_id"]), None)

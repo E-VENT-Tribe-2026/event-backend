@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.services.admin_report_history_service import report_history, reports_closed
 from app.utils.query_safety import like_contains
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,16 @@ def _event_card(ev: dict) -> dict:
         "end_datetime": end_dt,
         "status": ev.get("status"),
         "is_cancelled": str(ev.get("status") or "").lower() == "cancelled",
+        "is_removed": bool(ev.get("removed_at")),
+        "removed_at": _as_text(ev.get("removed_at")),
     }
+
+
+def _removed_by(admin_id, people: dict):
+    """The administrator who removed something, as a person summary, or None when not removed."""
+    if not admin_id:
+        return None
+    return people.get(str(admin_id)) or _build_user_summary(None, admin_id)
 
 
 def _build_user_summary(profile: dict | None, user_id: str | None = None) -> dict:
@@ -284,7 +294,7 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
     filter_norm = (status_filter or "all").lower().strip()
 
     query = supabase.table("events").select(
-        "id, title, start_datetime, end_datetime, status, created_by, banner_url",
+        "id, title, start_datetime, end_datetime, status, created_by, banner_url, removed_at, removed_by",
         count="exact"
     )
 
@@ -317,7 +327,9 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
     total_pages = max(1, math.ceil(total / limit))
 
     raw_events = [ev for ev in (res.data or []) if ev.get("id")]
-    creator_ids = list(dict.fromkeys(ev.get("created_by") for ev in raw_events if ev.get("created_by")))
+    creator_ids = list(dict.fromkeys(
+        person for ev in raw_events for person in (ev.get("created_by"), ev.get("removed_by")) if person
+    ))
 
     organizer_map = {}
     if creator_ids:
@@ -359,6 +371,9 @@ def list_admin_events(status_filter: str = "all", search: str | None = None, pag
             "organizer": organizer,
             "banner": ev.get("banner_url"),
             "banner_url": ev.get("banner_url"),
+            "is_removed": bool(ev.get("removed_at")),
+            "removed_at": _as_text(ev.get("removed_at")),
+            "removed_by": _removed_by(ev.get("removed_by"), organizer_map),
         })
 
     return {
@@ -398,7 +413,7 @@ def get_admin_user_details(user_id: str) -> dict:
     # 2. Fetch organized events
     org_res = (
         supabase.table("events")
-        .select("id, title, start_datetime, end_datetime, status")
+        .select("id, title, start_datetime, end_datetime, status, removed_at")
         .eq("created_by", user_id)
         .order("start_datetime", desc=True)
         .execute()
@@ -430,7 +445,7 @@ def get_admin_user_details(user_id: str) -> dict:
     if joined_event_ids:
         ev_res = (
             supabase.table("events")
-            .select("id, title, start_datetime, end_datetime, status")
+            .select("id, title, start_datetime, end_datetime, status, removed_at")
             .in_("id", joined_event_ids)
             .order("start_datetime", desc=True)
             .execute()
@@ -476,6 +491,7 @@ def get_admin_user_details(user_id: str) -> dict:
         "suspension_reason": None if is_admin else profile.get("suspension_reason"),
         "warning_count": warning_count,
         **({"friends": [], "blocked_users": [], "blocked_by": []} if is_admin else _relations_of(user_id)),
+        "report_history": None if is_admin else report_history(user_id),
     }
 
 
@@ -517,6 +533,7 @@ def get_admin_account_details(admin_id: str) -> dict:
         "icon_id": p.get("icon_id"),
         "admin_since": _as_text(p.get("admin_since")),
         "role": p.get("role") or "administrator",
+        "reports_closed": reports_closed(admin_id),
     }
 
 
@@ -561,6 +578,22 @@ def get_admin_event_details(event_id: str) -> dict:
         organizer = _build_user_summary(None, event.get("created_by"))
     if organizer and not organizer.get("id"):
         organizer = None
+
+    removed_by = None
+    if event.get("removed_by"):
+        try:
+            rb_res = (
+                supabase.table("profiles")
+                .select("id, username, full_name, avatar_url, avatar_kind, icon_id")
+                .eq("id", event["removed_by"])
+                .single()
+                .execute()
+            )
+            people = {str(event["removed_by"]): _build_user_summary(rb_res.data)} if rb_res.data else {}
+            removed_by = _removed_by(event["removed_by"], people)
+        except Exception as e:
+            logger.error(f"Failed to fetch the administrator who removed event {event_id}: {e}")
+            removed_by = _build_user_summary(None, event["removed_by"])
 
     # 3. Fetch participants
     part_res = (
@@ -610,7 +643,7 @@ def get_admin_event_details(event_id: str) -> dict:
     # 4. Fetch chat messages
     chat_res = (
         supabase.table("event_chats")
-        .select("id, sender_id, content, type, created_at")
+        .select("id, sender_id, content, type, created_at, removed_at, removed_by")
         .eq("event_id", event_id)
         .order("created_at", desc=False)
         .execute()
@@ -618,6 +651,8 @@ def get_admin_event_details(event_id: str) -> dict:
     raw_chats = chat_res.data or []
     chat_sender_ids = list(dict.fromkeys(c["sender_id"] for c in raw_chats if c.get("sender_id")))
 
+    chat_sender_ids += [c["removed_by"] for c in raw_chats
+                        if c.get("removed_by") and c["removed_by"] not in chat_sender_ids]
     missing_chat_senders = [sid for sid in chat_sender_ids if sid not in profile_map]
     if missing_chat_senders:
         try:
@@ -663,6 +698,9 @@ def get_admin_event_details(event_id: str) -> dict:
             "created_at": _as_text(c.get("created_at")),
             "is_system_message": is_system,
             "type": "system" if is_system else msg_type,
+            "is_removed": bool(c.get("removed_at")),
+            "removed_at": _as_text(c.get("removed_at")),
+            "removed_by": _removed_by(c.get("removed_by"), profile_map),
         }
         chats.append(item)
 
@@ -689,6 +727,9 @@ def get_admin_event_details(event_id: str) -> dict:
         "chat": chats,
         "banner": event.get("banner_url"),
         "banner_url": event.get("banner_url"),
+        "is_removed": bool(event.get("removed_at")),
+        "removed_at": _as_text(event.get("removed_at")),
+        "removed_by": removed_by,
     }
 
 def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_text: str) -> tuple[int, int]:
@@ -708,12 +749,14 @@ def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_t
     try:
         org_events_res = (
             supabase.table("events")
-            .select("id, title, start_datetime, status")
+            .select("id, title, start_datetime, status, removed_at")
             .eq("created_by", user_id)
             .neq("status", "cancelled")
             .execute()
         )
         for ev in (org_events_res.data or []):
+            if ev.get("removed_at"):
+                continue  # an event an administrator removed (#236) is not cancelled on top of that
             start_dt = _parse_iso_datetime(ev.get("start_datetime"))
             if start_dt and start_dt >= now_dt:
                 ev_id = ev["id"]
@@ -785,6 +828,17 @@ def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_t
 
     return cancelled_events_count, joined_events_removed_count
 
+def revoke_user_sessions(user_id: str) -> int:
+    """
+    End every session of a user (#228): their refresh tokens stop working, and their
+    access tokens are refused by supabase.auth.get_user() because the session is gone.
+    Uses the revoke_user_sessions SQL function (Supabase Auth has no admin route to sign
+    out another user). Raises if the function fails or is missing.
+    """
+    resp = supabase.rpc("revoke_user_sessions", {"p_user_id": str(user_id)}).execute()
+    data = getattr(resp, "data", None)
+    return data if isinstance(data, int) else 0
+
 def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     """
     Grants the administrator role to an account that is not an administrator,
@@ -839,6 +893,17 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not re-assert service key on postgrest client: {e}")
 
+        # End their sessions before changing anything: if that is not possible, refuse
+    # and leave the account untouched, so the request can simply be retried (#228).
+    try:
+        revoke_user_sessions(actual_target_id)
+    except Exception as e:
+        logger.error(f"Could not revoke sessions for user {actual_target_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not end the user's sessions. The account was not changed.",
+        )
+    
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
 
@@ -913,19 +978,13 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         logger.error(f"Failed to update profile to administrator for {actual_target_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant administrator role.")
 
-    # 11. End their sessions at once
+    # 11. End their sessions again: catches a sign-in made while the steps above ran (#228)
+    sessions_revoked = True
     try:
-        from app.core.config import settings
-        import requests
-        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-            logout_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{actual_target_id}/logout"
-            headers = {
-                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-                "apikey": settings.SUPABASE_SERVICE_KEY,
-            }
-            requests.post(logout_url, headers=headers, timeout=5)
+        revoke_user_sessions(actual_target_id)
     except Exception as e:
-        logger.warning(f"Could not revoke sessions for user {actual_target_id}: {e}")
+        sessions_revoked = False
+        logger.error(f"Could not revoke sessions after promotion for user {actual_target_id}: {e}")
 
     # 12. Record in audit log
     summary_dict = {
@@ -937,6 +996,7 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         "saved_events_deleted": True,
         "notifications_deleted": True,
         "profile_purged": True,
+        "sessions_revoked": sessions_revoked,
     }
     try:
         audit_entry = {
@@ -951,6 +1011,13 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not write audit log for user {actual_target_id}: {e}")
 
+    # Never report success while old sessions may still work (#228).
+    if not sessions_revoked:
+        raise HTTPException(
+            status_code=500,
+            detail="The account was made an administrator, but its sessions could not be ended.",
+        )
+    
     return {
         "message": "User made administrator successfully.",
         "user_id": actual_target_id,

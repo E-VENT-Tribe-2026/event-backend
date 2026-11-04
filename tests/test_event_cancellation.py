@@ -108,6 +108,10 @@ class TestTicket145CancelEventsIntegration:
 
             # Participants must NOT be deleted
             chain.delete.assert_not_called()
+
+            # Ensure cancellation_reason was persisted
+            update_payloads = [call.args[0] for call in chain.update.call_args_list if call.args]
+            assert any(p.get("cancellation_reason") == "Cancelled by organizer" for p in update_payloads)
         finally:
             app.dependency_overrides.pop(get_current_onboarded_user, None)
 

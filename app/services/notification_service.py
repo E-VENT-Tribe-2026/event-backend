@@ -112,6 +112,13 @@ def create_notification(
 
 
 def get_notifications(user_id: str, page: int = 1, limit: int = 10):
+    # #207: drop this user's invitations to started events first, so their
+    # notifications never show between two scheduled purges. Never blocks the list.
+    try:
+        from app.services.invitation_service import _purge_stale_invitations
+        _purge_stale_invitations(user_id)
+    except Exception:
+        logger.error("Invitation cleanup before notifications failed", exc_info=True)
     start = (page - 1) * limit
     end = start + limit - 1
 
@@ -136,14 +143,23 @@ def get_notifications(user_id: str, page: int = 1, limit: int = 10):
             row["related_user_id"] = rid
 
     # Warnings (#191): mark them, and say whether each one has been acknowledged.
+    # A "Your content was removed" notification (#236) is linked to its warning too, so the list can
+    # show that warning again; it is not itself a warning card (is_warning stays False).
     from app.services.warning_service import warning_states, WARNING_NOTIFICATION_TYPE
-    states = warning_states([r.get("warning_id") for r in rows if r.get("type") == WARNING_NOTIFICATION_TYPE])
+    from app.services.content_removal_service import CONTENT_REMOVED_NOTIFICATION_TYPE
+    states = warning_states([
+        r.get("warning_id") for r in rows
+        if r.get("type") in (WARNING_NOTIFICATION_TYPE, CONTENT_REMOVED_NOTIFICATION_TYPE)
+    ])
     for row in rows:
         is_warning = row.get("type") == WARNING_NOTIFICATION_TYPE
-        state = states.get(row.get("warning_id")) if is_warning else None
+        shows_warning = is_warning or (
+            row.get("type") == CONTENT_REMOVED_NOTIFICATION_TYPE and row.get("warning_id") is not None
+        )
+        state = states.get(row.get("warning_id")) if shows_warning else None
         row["is_warning"] = is_warning
-        row["warning_acknowledged"] = bool(state and state.get("acknowledged_at")) if is_warning else None
-        row["warning_withdrawn"] = bool(state and state.get("withdrawn_at")) if is_warning else None
+        row["warning_acknowledged"] = bool(state and state.get("acknowledged_at")) if shows_warning else None
+        row["warning_withdrawn"] = bool(state and state.get("withdrawn_at")) if shows_warning else None
 
     return {
         "page": page,

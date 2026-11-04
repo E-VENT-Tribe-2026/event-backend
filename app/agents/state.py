@@ -7,6 +7,7 @@ class AgentState(TypedDict, total=False):
     # Multi-turn conversation messages
     messages: list[dict[str, str]]
     user_id: Optional[str]
+    user: Optional[dict[str, Any]]
 
     # Entity slot tracking across conversation turns
     entity_slots: dict[str, Any]

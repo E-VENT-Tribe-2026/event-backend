@@ -327,4 +327,5 @@ def get_my_events(user_id: str):
         .select("event_id, events(*)") \
         .eq("user_id", user_id) \
         .execute()
-    return response.data or []
+    rows = response.data or []
+    return [r for r in rows if not (isinstance(r.get("events"), dict) and r["events"].get("removed_at"))]
