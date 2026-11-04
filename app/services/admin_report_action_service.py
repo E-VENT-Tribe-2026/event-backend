@@ -450,7 +450,7 @@ def act_on_report(report_id: int, admin_id: str, action: str, reason: str | None
     elif action == "suspend":
         target = validate_suspend(report)
         run = lambda: run_suspend(target, admin_id, reason)
-        effect = None   # suspend_user cannot fail after its commit point (the profile update)
+        effect = None   # profile may already be suspended; leftover event effects are retried on POST /suspend
     else:
         validate_remove_content(report)
         run = lambda: run_remove_content(report, admin_id, background_tasks)

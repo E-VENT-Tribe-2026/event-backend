@@ -1,7 +1,11 @@
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
 from app.services.profile_service import get_user_summaries, build_user_summary
-from app.services.removed_content import assert_event_not_removed, message_removed_error
+from app.services.removed_content import (
+    MESSAGE_REMOVED_CONTENT,
+    assert_event_not_removed,
+    message_removed_error,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -79,17 +83,41 @@ def _assert_event_not_cancelled(event_id: str) -> None:
         logger.error(f"Event status lookup failed for event {event_id}: {e}")
 
 
+def _people_for_message(msg: dict, senders: dict | None) -> dict:
+    needed = [uid for uid in (msg.get("sender_id"), msg.get("removed_by")) if uid]
+    if not needed:
+        return senders or {}
+    missing = needed if senders is None else [uid for uid in needed if uid not in senders]
+    if not missing:
+        return senders
+    return {**(senders or {}), **get_user_summaries(missing)}
+
+
 def _enrich_message(msg: dict, event_id: str, organizer_id=_ORGANIZER_UNSET, senders: dict = None) -> dict:
     """Add sender, sender_name and sender_role to a message dict.
 
-    A message an administrator removed (#236) keeps its sender but loses its text for everyone:
-    content is "" and is_removed is true. removed_by is never sent to users.
+    A message an administrator removed (#236) keeps its sender; users see a placeholder
+    instead of the original text, plus the administrator who removed it. The original
+    stays in the database. Works on a copy so the stored row is not rewritten.
     """
+    msg = dict(msg)
     msg["is_removed"] = bool(msg.get("removed_at"))
     msg.setdefault("removed_at", None)
-    msg.pop("removed_by", None)
+    people = _people_for_message(msg, senders)
+
+    remover_id = msg.get("removed_by") if msg["is_removed"] else None
+    if remover_id:
+        remover = people.get(remover_id) or build_user_summary(None, remover_id)
+        msg["removed_by"] = dict(remover)
+        msg["removed_by_name"] = (
+            msg["removed_by"].get("full_name") or msg["removed_by"].get("display_name") or "Unknown"
+        )
+    else:
+        msg["removed_by"] = None
+        msg["removed_by_name"] = None
+
     if msg["is_removed"]:
-        msg["content"] = ""
+        msg["content"] = MESSAGE_REMOVED_CONTENT
 
     sid = msg.get("sender_id")
     if not sid:
@@ -102,11 +130,8 @@ def _enrich_message(msg: dict, event_id: str, organizer_id=_ORGANIZER_UNSET, sen
     if organizer_id is _ORGANIZER_UNSET:
         organizer_id = _get_organizer_id(event_id)
 
-    if senders is None:
-        senders = get_user_summaries([sid])
-
     # Defensive fallback only: get_user_summaries already returns a stub for every requested id
-    sender = senders.get(sid) or build_user_summary(None, sid)
+    sender = people.get(sid) or build_user_summary(None, sid)
 
     msg["sender"] = dict(sender)
     msg["sender_name"] = msg["sender"].get("full_name") or "Unknown"
@@ -176,12 +201,19 @@ def get_event_messages(user_id: str, event_id: str, page: int = 1, limit: int = 
     # Fetch organizer once
     organizer_id = _get_organizer_id(event_id)
 
-    # Batch fetch all sender summaries in a single query
-    sender_ids = list({m["sender_id"] for m in messages if m.get("sender_id")})
-    senders = get_user_summaries(sender_ids) if sender_ids else {}
+    # Batch fetch sender and removing-administrator summaries in a single query
+    people_ids = list({
+        uid
+        for m in messages
+        for uid in (m.get("sender_id"), m.get("removed_by"))
+        if uid
+    })
+    senders = get_user_summaries(people_ids) if people_ids else {}
 
-    for msg in messages:
+    messages = [
         _enrich_message(msg, event_id, organizer_id=organizer_id, senders=senders)
+        for msg in messages
+    ]
 
     return {"event_id": event_id, "page": page, "limit": limit, "data": messages}
 

@@ -147,7 +147,6 @@ def build_auth_session_response(user_id: str, session) -> dict:
             detail="Login failed. Please check your credentials."
         )
 
-    profile_data = {}
     try:
         profile_res = (
             supabase.table("profiles")
@@ -157,8 +156,12 @@ def build_auth_session_response(user_id: str, session) -> dict:
             .execute()
         )
         profile_data = profile_res.data if isinstance(profile_res.data, dict) else {}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"Could not fetch profile role for user {user_id}: {e}")
+        logger.error(f"Could not fetch profile role for user {user_id}: {e}")
+        from app.core.dependencies import suspension_lookup_unavailable
+        raise suspension_lookup_unavailable()
 
     if profile_data.get("suspended_at"):
         from app.core.dependencies import suspension_error

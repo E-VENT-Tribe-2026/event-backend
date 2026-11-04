@@ -98,9 +98,11 @@ def build_public_profile(user_id: str, viewer_id: str) -> dict:
 
     profile["events"] = events
 
-    # Friends list
+    # Friends list. has_more is returned separately so the client does not infer it
+    # from len(friends) == 10, which breaks when blocked users are filtered out.
     friends_page = get_user_friends_summary_page(user_id, page=1, limit=10, viewer_id=viewer_id)
     profile["friends"] = friends_page.get("data", [])
+    profile["friends_has_more"] = bool(friends_page.get("has_more"))
 
     profile["friendship"] = friendship
     profile["blocked_by_me"] = False

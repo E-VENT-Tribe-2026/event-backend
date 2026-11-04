@@ -15,7 +15,7 @@ from gotrue.errors import AuthApiError
 
 from app.core.dependencies import require_admin
 from app.main import app
-from tests._fake_supabase import FakeSupabase
+from tests._fake_supabase import FakeQuery, FakeSupabase
 
 ADM = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 S = "55555555-5555-4555-8555-555555555555"
@@ -159,6 +159,56 @@ def test_suspension_cancels_upcoming_events_and_leaves_joined_ones(db):
     assert "read-only" in str(err.value.detail)
 
 
+def test_suspend_reports_incomplete_event_cancel_and_retry_finishes_it(db):
+    real_execute = FakeQuery.execute
+
+    def fail_first_cancel(self):
+        if self.name == "events" and self.action == "update" and (self.payload or {}).get("status") == "cancelled":
+            raise RuntimeError("event update failed")
+        return real_execute(self)
+
+    with patch.object(FakeQuery, "execute", fail_first_cancel):
+        res = suspend()
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "suspension_effects_incomplete"
+    assert res.json()["detail"]["status"] == "suspended"
+    assert _row(db, "profiles", id=S)["suspended_at"] is not None
+    assert _row(db, "events", id=E_UP)["status"] == "active"
+
+    retry = suspend()
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "suspended"
+    assert retry.json()["cancelled_events_count"] == 1
+    assert _row(db, "events", id=E_UP)["status"] == "cancelled"
+    assert _row(db, "events", id=E_UP)["cancellation_reason"] == "Organizer's account was suspended"
+    notes = [n for n in db.tables["notifications"] if n["user_id"] == P and n.get("event_id") == E_UP]
+    assert notes and notes[0]["type"] == "event_cancelled"
+    assert _row(db, "events", id=E_PAST)["status"] == "active"
+
+
+def test_suspend_reports_incomplete_participation_removal_and_retry_finishes_it(db):
+    real_execute = FakeQuery.execute
+
+    def fail_first_leave(self):
+        if self.name == "event_participants" and self.action == "delete":
+            raise RuntimeError("participation delete failed")
+        return real_execute(self)
+
+    with patch.object(FakeQuery, "execute", fail_first_leave):
+        res = suspend()
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "suspension_effects_incomplete"
+    assert _row(db, "profiles", id=S)["suspended_at"] is not None
+    assert _row(db, "events", id=E_UP)["status"] == "cancelled"
+    assert any(r["event_id"] == E_OTHER_UP and r["user_id"] == S for r in db.tables["event_participants"])
+
+    retry = suspend()
+    assert retry.status_code == 200
+    assert retry.json()["joined_events_removed_count"] == 1
+    joined = {r["event_id"] for r in db.tables["event_participants"] if r["user_id"] == S}
+    assert joined == {E_OTHER_PAST}
+
+
 def test_lifting_restores_nothing_that_was_cancelled(db):
     suspend()
     lift()
@@ -218,6 +268,43 @@ def test_sign_in_is_refused_with_reason_only_for_correct_credentials(db):
         res = client.post("/api/auth/login", json={"email": "sam@x.io", "password": "Wrong-pass1"})
         assert res.status_code == 401
         assert "suspend" not in res.text.lower()
+
+
+def _fail_suspension_lookup():
+    """Keep other DB operations working; only the suspension profile query fails."""
+    real_execute = FakeQuery.execute
+
+    def execute(self):
+        if self.name == "profiles" and "suspended_at" in str(self.cols):
+            raise RuntimeError("profiles lookup failed")
+        return real_execute(self)
+
+    return patch.object(FakeQuery, "execute", execute)
+
+
+def test_existing_session_is_503_when_suspension_lookup_fails(db):
+    suspend()
+    with _fail_suspension_lookup():
+        res = client.get("/api/auth/me", headers=as_user(S))
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "suspension_check_unavailable"
+    assert "access_token" not in res.text
+    assert res.json()["detail"].get("reason") is None
+
+
+def test_sign_in_is_503_when_suspension_lookup_fails(db):
+    suspend()
+    session_ok = SimpleNamespace(
+        session=SimpleNamespace(access_token="tok", refresh_token="ref"),
+        user=SimpleNamespace(id=S),
+    )
+    with patch("app.services.auth_service.supabase") as sb, _fail_suspension_lookup():
+        sb.auth.sign_in_with_password.return_value = session_ok
+        sb.table.side_effect = db.table
+        res = client.post("/api/auth/login", json={"email": "sam@x.io", "password": "Correct-pass1"})
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "suspension_check_unavailable"
+    assert "access_token" not in res.text
 
 
 # ---- hidden from search and suggestions, profile unavailable -----------------

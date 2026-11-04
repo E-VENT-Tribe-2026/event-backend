@@ -1,8 +1,9 @@
 """Removed events and chat messages (ticket #236).
 
 An administrator removes an event or a chat message by marking it (removed_at, removed_by);
-nothing is deleted. Users never see removed events, and removed messages come back without
-their text. Kept free of other service imports so any service can use it.
+nothing is deleted. Users never see removed events. Removed messages stay in the database
+and come back with is_removed and a placeholder instead of the original text. Kept free of
+other service imports so any service can use it.
 """
 import logging
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 EVENT_REMOVED_CODE = "event_removed"
 EVENT_REMOVED_MESSAGE = "This event was removed by an administrator."
 MESSAGE_REMOVED_CODE = "message_removed"
+MESSAGE_REMOVED_CONTENT = "This message was removed by the administrator."
 LOOKUP_CHUNK = 100
 
 
@@ -29,7 +31,7 @@ def event_removed_error() -> HTTPException:
 def message_removed_error() -> HTTPException:
     return HTTPException(
         status_code=400,
-        detail={"code": MESSAGE_REMOVED_CODE, "message": "This message was removed by an administrator."},
+        detail={"code": MESSAGE_REMOVED_CODE, "message": MESSAGE_REMOVED_CONTENT},
     )
 
 

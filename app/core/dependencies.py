@@ -24,8 +24,22 @@ def suspension_error(reason: str | None) -> HTTPException:
     )
 
 
+def suspension_lookup_unavailable() -> HTTPException:
+    """503 when we cannot tell whether the account is allowed to use the application."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "suspension_check_unavailable",
+            "message": "Could not verify whether this account is allowed to use the application.",
+        },
+    )
+
+
 def refuse_if_suspended(user_id: str) -> None:
-    """Raise suspension_error when the account is suspended (#192)."""
+    """Raise suspension_error when the account is suspended (#192).
+
+    A failed lookup must not grant access: refuse with 503 until the check can be completed.
+    """
     try:
         res = (
             supabase.table("profiles")
@@ -35,9 +49,11 @@ def refuse_if_suspended(user_id: str) -> None:
             .execute()
         )
         data = res.data
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Could not check suspension of user {user_id}: {e}")
-        return
+        raise suspension_lookup_unavailable()
     if isinstance(data, list):
         data = data[0] if data else {}
     if isinstance(data, dict) and data.get("suspended_at"):

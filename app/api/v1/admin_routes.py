@@ -75,7 +75,10 @@ def invite_user(
     email_address: EmailStr = Path(..., description="Email of the person to invite"),
     admin=Depends(require_admin),
 ):
-    """Email a one-time signup code to this address. They must enter it to register."""
+    """Email a one-time signup code to this address. They must enter it to register.
+
+    Refuses with 409 when the email already belongs to an existing user.
+    """
     return send_registration_invite(admin_id=admin.id, email=email_address)
 
 
@@ -324,6 +327,8 @@ def post_suspend(
     Suspends a user account with a written reason, until an administrator lifts it.
     The account can no longer sign in or use the application, its upcoming events are
     cancelled and it leaves the upcoming events it joined. Refused for an administrator.
+    If required event updates fail after the account is suspended, the response is 503
+    and the same request can be retried to finish them without lifting the suspension.
     """
     return suspend_user(user_id=user_id, admin_id=admin.id, reason=body.reason)
 

@@ -74,10 +74,21 @@ class ChatMessageResponse(BaseModel):
     )
     sender_role: Optional[str] = Field(None, description="Role of the sender: organizer, participant, or system.")
     sender: Optional[UserSummary] = Field(None, description="Username, full name, and profile picture of the sender; null for system messages.")
-    content: str = Field(..., description="Text content of the message; empty for a message an administrator removed.")
+    content: str = Field(
+        ...,
+        description='Text of the message, or "This message was removed by the administrator." when it was removed.',
+    )
     created_at: datetime = Field(..., description="Timestamp when the message was sent (UTC).")
     is_removed: bool = Field(False, description="True when an administrator removed the message.")
     removed_at: Optional[datetime] = Field(None, description="When the message was removed (UTC); null otherwise.")
+    removed_by: Optional[UserSummary] = Field(
+        None,
+        description="Administrator who removed the message; null when it has not been removed.",
+    )
+    removed_by_name: Optional[str] = Field(
+        None,
+        description="Full name of the administrator who removed the message; null when it has not been removed.",
+    )
 
     model_config = {
         "json_schema_extra": {

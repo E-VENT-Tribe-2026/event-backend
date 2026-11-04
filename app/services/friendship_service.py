@@ -558,7 +558,11 @@ def get_user_friends_summary_page(
     limit: int = DEFAULT_PAGE_LIMIT,
     viewer_id: str | None = None,
 ) -> dict:
-    """Return a paginated list of UserSummary objects representing user_id's friends."""
+    """Return a paginated list of UserSummary objects representing user_id's friends.
+
+    Blocked users are removed before the page is cut, so each page is filled with
+    visible friends and has_more is whether more visible friends exist after it.
+    """
     start = (page - 1) * limit
     try:
         uid = _uuid(user_id)
@@ -571,18 +575,19 @@ def get_user_friends_summary_page(
         .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
         .order("created_at", desc=True)
         .order("id", desc=True)
-        .range(start, start + limit)
         .execute()
     )
-    rows, has_more = _page(resp.data or [], limit)
-
-    others = [r["friend_id"] if _norm(r["user_id"]) == _norm(uid) else r["user_id"] for r in rows]
+    others = [
+        r["friend_id"] if _norm(r["user_id"]) == _norm(uid) else r["user_id"]
+        for r in (resp.data or [])
+    ]
     if viewer_id:
-        hidden = set(get_hidden_user_ids(viewer_id))
-        others = [o for o in others if o not in hidden]
+        hidden = {_norm(h) for h in get_hidden_user_ids(viewer_id)}
+        others = [o for o in others if _norm(o) not in hidden]
 
-    summaries = get_user_summaries(others) if others else {}
-    data = [summaries.get(other) or build_user_summary(None, other) for other in others]
+    window, has_more = _page(others[start:start + limit + 1], limit)
+    summaries = get_user_summaries(window) if window else {}
+    data = [summaries.get(other) or build_user_summary(None, other) for other in window]
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}
 
 
