@@ -56,6 +56,28 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+    nonce: Optional[str] = None
+    access_token: Optional[str] = None
+
+    @field_validator("id_token", mode="before")
+    @classmethod
+    def require_id_token(cls, v):
+        token = str(v or "").strip()
+        if not token:
+            raise ValueError("Google id_token is required.")
+        return token
+
+    @field_validator("nonce", "access_token", mode="before")
+    @classmethod
+    def strip_optional(cls, v):
+        if v is None:
+            return None
+        token = str(v).strip()
+        return token or None
+
+
 class AuthResponse(BaseModel):
     access_token: str
     refresh_token: Optional[str] = None
@@ -77,6 +99,12 @@ class MFAStatusResponse(BaseModel):
     has_mfa_linked: bool = False
     is_verified: bool = False
     factor_id: Optional[str] = None
+
+
+class MeResponse(MFAStatusResponse):
+    id: str
+    email: Optional[str] = None
+    username: Optional[str] = None
 
 
 class MFATOTPData(BaseModel):

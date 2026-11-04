@@ -19,6 +19,7 @@ PUBLIC_PATHS = {
     "/openapi.json",
     "/api/health",
     "/api/auth/login",
+    "/api/auth/google",
     "/api/auth/register",
     "/api/auth/verify-invite",
     "/api/auth/forgot-password",
@@ -170,7 +171,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
             )
 
         try:
-            await verify_jwt(token)
+            request.state.jwt_payload = await verify_jwt(token)
         except InvalidTokenError as e:
             logger.warning(f"Rejected JWT on {request.method} {request.url.path}: {e}")
             return JSONResponse(

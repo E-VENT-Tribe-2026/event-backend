@@ -118,8 +118,9 @@ class TestAuthRoutes:
         assert response.json()["message"] == "Password reset email sent."
         mock_forgot_password.assert_called_once_with("test@test.com")
 
+    @patch("app.api.v1.auth_routes.get_mfa_status")
     @patch("app.api.v1.auth_routes.supabase")
-    def test_get_auth_me_route_includes_username(self, mock_sb):
+    def test_get_auth_me_route_includes_username(self, mock_sb, mock_mfa):
         class MockUser:
             id = "u1"
             email = "test@test.com"
@@ -133,7 +134,14 @@ class TestAuthRoutes:
             chain.select.return_value = chain
             chain.eq.return_value = chain
             chain.single.return_value = chain
-            chain.execute.return_value = MagicMock(data={"username": "alice_42"})
+            chain.execute.return_value = MagicMock(data={"username": "alice_42", "role": "user"})
+            mock_mfa.return_value = {
+                "role": "user",
+                "is_admin": False,
+                "has_mfa_linked": False,
+                "is_verified": True,
+                "factor_id": None,
+            }
 
             response = client.get("/api/auth/me", headers={"Authorization": "Bearer token"})
             assert response.status_code == 200
@@ -141,6 +149,93 @@ class TestAuthRoutes:
             assert data["id"] == "u1"
             assert data["email"] == "test@test.com"
             assert data["username"] == "alice_42"
+            assert data["is_admin"] is False
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("app.api.v1.auth_routes.get_mfa_status")
+    @patch("app.api.v1.auth_routes.supabase")
+    def test_get_auth_me_returns_admin_mfa_flags(self, mock_sb, mock_mfa):
+        class MockAdmin:
+            id = "admin-1"
+            email = "admin@example.com"
+
+        from app.core.dependencies import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: MockAdmin()
+
+        try:
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.single.return_value = chain
+            chain.execute.return_value = MagicMock(data={"username": "admin", "role": "administrator"})
+            mock_mfa.return_value = {
+                "role": "administrator",
+                "is_admin": True,
+                "has_mfa_linked": True,
+                "is_verified": False,
+                "factor_id": "factor-1",
+            }
+
+            response = client.get("/api/auth/me", headers={"Authorization": "Bearer token"})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["is_admin"] is True
+            assert data["has_mfa_linked"] is True
+            assert data["is_verified"] is False
+            assert data["factor_id"] == "factor-1"
+            assert data["role"] == "administrator"
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    @patch("app.api.v1.auth_routes.login_with_google_id_token")
+    def test_google_login_route_returns_admin_session(self, mock_google):
+        mock_google.return_value = {
+            "access_token": "supa-tok",
+            "refresh_token": "refresh-tok",
+            "token_type": "bearer",
+            "role": "administrator",
+            "is_admin": True,
+            "has_mfa_linked": True,
+            "is_verified": False,
+            "factor_id": "factor-1",
+        }
+
+        response = client.post("/api/auth/google", json={"id_token": "google-id-token"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["access_token"] == "supa-tok"
+        assert data["is_admin"] is True
+        assert data["is_verified"] is False
+        mock_google.assert_called_once_with(
+            id_token="google-id-token",
+            nonce=None,
+            access_token=None,
+        )
+
+    @patch("app.api.v1.auth_routes.build_auth_session_response")
+    def test_session_route_returns_login_payload(self, mock_build):
+        class MockAdmin:
+            id = "admin-1"
+            email = "admin@example.com"
+
+        from app.core.dependencies import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: MockAdmin()
+        try:
+            mock_build.return_value = {
+                "access_token": "tok",
+                "token_type": "bearer",
+                "role": "administrator",
+                "is_admin": True,
+                "has_mfa_linked": True,
+                "is_verified": False,
+                "factor_id": "factor-1",
+            }
+            response = client.get("/api/auth/session", headers={"Authorization": "Bearer tok"})
+            assert response.status_code == 200
+            assert response.json()["is_admin"] is True
+            mock_build.assert_called_once_with("admin-1", {"access_token": "tok"})
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 

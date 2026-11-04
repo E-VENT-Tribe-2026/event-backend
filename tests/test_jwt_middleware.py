@@ -217,3 +217,7 @@ class TestJWTMiddlewareEnforced:
     def test_public_path_skips_verification(self, _isolated):
         TestClient(app).get("/health")
         _isolated.assert_not_awaited()
+
+    def test_google_login_path_is_public(self, _isolated):
+        from app.core.jwt_middleware import _is_public
+        assert _is_public("/api/auth/google") is True
