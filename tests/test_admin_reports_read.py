@@ -224,8 +224,9 @@ def test_event_report_item(db):
         rep = item["reported"]
         assert rep["type"] == "event" and rep["user"] is None and rep["message"] is None
         assert rep["event"]["id"] == EV1 and rep["event"]["title"] == "Board game night"
+        assert rep["event"]["name"] == "Board game night"
         assert rep["event"]["banner_url"] == "https://img/Board game night.jpg"
-        assert {"id", "title", "banner", "banner_url"} <= set(rep["event"])
+        assert {"id", "title", "name", "banner", "banner_url"} <= set(rep["event"])
 
 
 def test_user_report_item(db):
@@ -250,7 +251,8 @@ def test_message_report_item(db):
         assert rep["type"] == "message"
         assert rep["message"] == {"id": 42, "event_id": EV1}
         assert rep["user"]["id"] == TOM and rep["user"]["username"] == "tom"
-        assert rep["event"] is None  # null in the list
+        assert rep["event"]["id"] == EV1 and rep["event"]["title"] == "Board game night"
+        assert rep["event"]["name"] == "Board game night"
 
 
 def test_deleted_reporter_gives_null(db):
@@ -304,7 +306,10 @@ def test_details_event_report_from_event_details(db):
     assert body["description"] == "Not real." and body["origin"] == "event_details"
     assert body["reporter"]["username"] == "mia"
     assert body["reported"]["type"] == "event" and body["reported"]["event"]["id"] == EV1
-    assert body["event"] is None and body["chat_context"] is None
+    assert body["reported"]["event"]["title"] == "Board game night"
+    assert body["event"]["id"] == EV1 and body["event"]["title"] == "Board game night"
+    assert body["event"]["name"] == "Board game night"
+    assert body["chat_context"] is None
     assert body["outcome"] is None and body["closed_by"] is None and body["closed_at"] is None
     assert body["content_removed"] is False and body["reported_user_is_administrator"] is False
 
@@ -316,7 +321,7 @@ def test_details_event_report_from_event_chat(db):
     body = _detail(1)
     assert body["origin"] == "event_chat"
     assert body["event"]["id"] == EV1 and body["event"]["title"] == "Board game night"
-    assert {"id", "title", "banner", "banner_url"} <= set(body["event"])
+    assert {"id", "title", "name", "banner", "banner_url"} <= set(body["event"])
     assert body["chat_context"] == ctx
     assert body["reported"]["event"]["id"] == EV1 and body["reported"]["user"] is None
 
@@ -335,8 +340,9 @@ def test_details_message_report(db):
     assert body["reported"]["type"] == "message"
     assert body["reported"]["message"] == {"id": 42, "event_id": EV1}
     assert body["reported"]["user"]["id"] == TOM
-    assert body["reported"]["event"] is None
+    assert body["reported"]["event"]["id"] == EV1 and body["reported"]["event"]["title"] == "Board game night"
     assert body["event"]["id"] == EV1 and body["event"]["title"] == "Board game night"
+    assert body["event"]["name"] == "Board game night"
     assert body["chat_context"] == ctx
     assert [c["reported"] for c in body["chat_context"]] == [False, True]
     assert body["content_removed"] is False
@@ -442,7 +448,7 @@ def test_closed_report_details_show_outcome_closer_and_time(db):
     _put(db, _report(1, "2026-10-01T10:00:00+00:00", status="action_taken", outcome="warned",
                      closed_by=ADM, closed_at="2026-10-29T08:12:30.004512+00:00"))
     body = _detail(1)
-    assert body["status"] == "action_taken" and body["outcome"] == "warned"
+    assert body["status"] == "resolved" and body["outcome"] == "warned"
     assert body["closed_at"] == "2026-10-29T08:12:30.004512+00:00"
     assert PERSON_KEYS <= set(body["closed_by"])
     assert body["closed_by"]["id"] == ADM and body["closed_by"]["username"] == "boss"
@@ -894,7 +900,7 @@ def test_openapi_exposes_report_vocabularies_as_enums():
     schemas = _components()
     for name in ("AdminReportItem", "AdminReportDetailResponse"):
         props = schemas[name]["properties"]
-        assert _enum_of(props["status"]) == ["open", "dismissed", "action_taken"], name
+        assert _enum_of(props["status"]) == ["open", "dismissed", "resolved"], name
         assert _enum_of(props["target_type"]) == ["event", "user", "message"], name
         assert _enum_of(props["origin"]) == ["event_details", "profile", "event_chat"], name
         assert _enum_of(props["reason"]) == ["spam", "inappropriate_content", "harassment_or_hate",

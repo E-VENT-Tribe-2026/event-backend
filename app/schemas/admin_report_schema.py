@@ -4,7 +4,7 @@ from app.schemas.suspension_schema import SUSPENSION_REASON_MAX_LENGTH
 from app.schemas.warning_schema import PersonSummary, WARNING_REASON_MAX_LENGTH
 
 
-ReportStatus = Literal["open", "dismissed", "action_taken"]
+ReportStatus = Literal["open", "dismissed", "resolved"]
 ReportOutcome = Literal["dismissed", "warned", "content_removed", "suspended"]
 ReportReason = Literal["spam", "inappropriate_content", "harassment_or_hate", "scam_or_fraud",
                        "misleading_event", "other"]
@@ -15,6 +15,7 @@ ReportTargetType = Literal["event", "user", "message"]
 class ReportedEvent(BaseModel):
     id: str
     title: Optional[str] = None
+    name: Optional[str] = None
     banner: Optional[str] = None
     banner_url: Optional[str] = None
 

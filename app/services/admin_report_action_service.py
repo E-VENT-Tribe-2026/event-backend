@@ -20,7 +20,7 @@ from fastapi import HTTPException
 
 from app.core.dependencies import is_admin_role
 from app.db.supabase_client import supabase
-from app.services.admin_report_service import get_report_details
+from app.services.admin_report_service import get_report_details, public_status
 from app.services.audit_service import record_audit
 from app.services.content_removal_service import remove_event, remove_message
 from app.services.report_service import report_error
@@ -30,6 +30,8 @@ from app.services.warning_service import give_warning
 logger = logging.getLogger(__name__)
 
 REOPEN_ATTEMPTS = 3
+STATUS_DISMISSED = "dismissed"
+STATUS_RESOLVED = "resolved"
 
 _OUTCOMES = {"warn": "warned", "suspend": "suspended", "remove_content": "content_removed"}
 
@@ -116,18 +118,61 @@ def validate_remove_content(report: dict) -> None:
         raise report_error(409, "already_removed", "This content is already removed.")
 
 
+def _as_service_role() -> None:
+    """Keep report writes on the service role. A user JWT on the shared client cannot UPDATE reports (RLS)."""
+    try:
+        from app.core.config import settings
+        key = settings.SUPABASE_SERVICE_KEY
+        if key and supabase is not None and hasattr(supabase, "postgrest"):
+            supabase.postgrest.auth(key)
+    except Exception:
+        logger.warning("Could not re-assert service role before closing a report", exc_info=True)
+
+
+def _row_of(report_id: int) -> dict | None:
+    return _first(
+        supabase.table("reports").select("id, status, outcome, closed_by")
+        .eq("id", report_id).limit(1).execute()
+    )
+
+
+def _closed_by(row: dict | None, admin_id: str) -> bool:
+    return bool(row) and str(row.get("closed_by") or "").lower() == str(admin_id).lower()
+
+
 def claim(report_id: int, status_value: str, outcome: str, admin_id: str, claimed_at: str | None = None) -> None:
-    """Close the report if it is still open. Nothing comes back when another administrator was first."""
+    """Close the report if it is still open. Re-reads the row so an empty PostgREST RETURNING is not a 409."""
+    _as_service_role()
+    patch = {
+        "status": status_value,
+        "outcome": outcome,
+        "closed_by": admin_id,
+        "closed_at": claimed_at or _now(),
+    }
     claimed = (
         supabase.table("reports")
-        .update({"status": status_value, "outcome": outcome, "closed_by": admin_id,
-                 "closed_at": claimed_at or _now()})
+        .update(patch)
         .eq("id", report_id)
         .eq("status", "open")
         .execute()
     )
-    if not claimed.data:
+    if claimed.data:
+        return
+
+    row = _row_of(report_id)
+    if row is None:
+        raise report_error(404, "report_not_found", "This report does not exist.")
+    if public_status(row.get("status")) != "open":
+        if _closed_by(row, admin_id):
+            return
         raise report_error(409, "report_closed", "This report is already closed.")
+
+    _as_service_role()
+    supabase.table("reports").update(patch).eq("id", report_id).eq("status", "open").execute()
+    row = _row_of(report_id)
+    if row and public_status(row.get("status")) != "open":
+        return
+    raise report_error(500, "report_close_failed", "The report could not be closed. Please try again.")
 
 
 def revert(report_id: int, status_value: str, admin_id: str, outcome: str | None = None,
@@ -333,11 +378,11 @@ def _fallback_details(report: dict, status_value: str, outcome: str, admin_id: s
     event card carry only their ids (title, names, avatars are null), content_removed is true only for
     a removal and reported_user_is_administrator is false."""
     target = report["target_type"]
-    event_ref = {"id": str(report["event_id"])} if report.get("event_id") else None
+    event_ref = {"id": str(report["event_id"]), "title": None, "name": None} if report.get("event_id") else None
     from_chat = report.get("origin") == "event_chat"
     return {
         "id": report["id"],
-        "status": status_value,
+        "status": public_status(status_value),
         "reason": report["reason"],
         "created_at": str(report["created_at"]),
         "target_type": target,
@@ -345,13 +390,13 @@ def _fallback_details(report: dict, status_value: str, outcome: str, admin_id: s
         "reporter": _person_ref(report.get("reporter_id")),
         "reported": {
             "type": target,
-            "event": event_ref if target == "event" else None,
+            "event": event_ref,
             "user": _person_ref(report.get("reported_user_id")) if target != "event" else None,
             "message": ({"id": report["message_id"], "event_id": event_ref and event_ref["id"]}
                         if target == "message" else None),
         },
         "description": report.get("description"),
-        "event": event_ref if from_chat else None,
+        "event": event_ref,
         "chat_context": report.get("chat_context") if from_chat else None,
         "outcome": outcome,
         "closed_by": _person_ref(admin_id),
@@ -378,11 +423,11 @@ def dismiss_report(report_id: int, admin_id: str) -> dict:
     report = load_report(report_id)
     claimed_at = _now()
     try:
-        claim(report["id"], "dismissed", "dismissed", admin_id, claimed_at)
+        claim(report["id"], STATUS_DISMISSED, "dismissed", admin_id, claimed_at)
     except HTTPException:
         raise
     except Exception:
-        revert(report["id"], "dismissed", admin_id, "dismissed", "dismiss")
+        revert(report["id"], STATUS_DISMISSED, admin_id, "dismissed", "dismiss")
         raise
     record_audit(
         action="report_dismissed",
@@ -392,7 +437,7 @@ def dismiss_report(report_id: int, admin_id: str) -> dict:
         description=f"Dismissed report {report_id}",
         details={"outcome": "dismissed"},
     )
-    return _details_after_close(report, "dismissed", "dismissed", admin_id, claimed_at)
+    return _details_after_close(report, STATUS_DISMISSED, "dismissed", admin_id, claimed_at)
 
 
 def act_on_report(report_id: int, admin_id: str, action: str, reason: str | None, background_tasks=None) -> dict:
@@ -411,7 +456,7 @@ def act_on_report(report_id: int, admin_id: str, action: str, reason: str | None
         run = lambda: run_remove_content(report, admin_id, background_tasks)
         effect = lambda claimed_at: _content_was_removed(report, admin_id, claimed_at)
 
-    claimed_at = _close(report, "action_taken", outcome, admin_id, action, run, effect)
+    claimed_at = _close(report, STATUS_RESOLVED, outcome, admin_id, action, run, effect)
     record_audit(
         action="report_action_taken",
         admin_id=admin_id,
@@ -420,5 +465,5 @@ def act_on_report(report_id: int, admin_id: str, action: str, reason: str | None
         description=f"Acted on report {report_id}: {outcome}",
         details={"outcome": outcome, "action": action},
     )
-    return _details_after_close(report, "action_taken", outcome, admin_id, claimed_at,
+    return _details_after_close(report, STATUS_RESOLVED, outcome, admin_id, claimed_at,
                                 content_removed=action == "remove_content")

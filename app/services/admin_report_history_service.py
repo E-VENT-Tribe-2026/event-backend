@@ -27,9 +27,10 @@ def _read_all(build) -> list:
 
 
 def _entry(row: dict) -> dict:
+    from app.services.admin_report_service import public_status
     return {
         "id": row["id"],
-        "status": row["status"],
+        "status": public_status(row.get("status")),
         "created_at": str(row["created_at"]),
         "target_type": row["target_type"],
         "reason": row["reason"],

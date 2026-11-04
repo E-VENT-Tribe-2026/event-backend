@@ -143,7 +143,7 @@ def test_warn_failing_in_the_last_lookup_keeps_the_report_closed_and_does_not_wa
     with caplog.at_level(logging.INFO):
         res = _act(action="warn")
     assert lookup.hits == 1, "the failure was never injected"
-    _assert_closed_response(db, res, 1, "action_taken", "warned")
+    _assert_closed_response(db, res, 1, "resolved", "warned")
     assert len(_warnings(db)) == 1 and len(_notifications(db, "warning", TOM)) == 1
     assert _audit_types(db).count("warning_given") == 1
     logs = _report_logs(db)
@@ -162,7 +162,7 @@ def test_remove_event_failing_in_the_result_after_the_removal_keeps_the_report_c
     with caplog.at_level(logging.INFO):
         res = _act(action="remove_content", reason=None)
     assert lookup.hits == 1, "the failure was never injected"
-    _assert_closed_response(db, res, 1, "action_taken", "content_removed")
+    _assert_closed_response(db, res, 1, "resolved", "content_removed")
     ev = _event_row(db)
     assert ev["removed_at"] is not None and ev["removed_by"] == ADM
     assert _detail()["content_removed"] is True
@@ -184,7 +184,7 @@ def test_remove_message_failing_between_the_mark_and_the_warning_keeps_the_repor
     with caplog.at_level(logging.INFO):
         res = _act(action="remove_content", reason=None)
     assert lookup.hits == 1, "the failure was never injected"
-    _assert_closed_response(db, res, 1, "action_taken", "content_removed")
+    _assert_closed_response(db, res, 1, "resolved", "content_removed")
     msg = _chat_row(db)
     assert msg["removed_at"] is not None and msg["removed_by"] == ADM     # the removal stands
     assert _logged(caplog, logging.ERROR, "the action was done but the service raised afterwards")
@@ -240,7 +240,7 @@ def test_when_the_effect_cannot_be_checked_the_report_stays_closed_and_is_flagge
     assert service.hits == 1 and check.hits >= 1
     assert res.status_code == 503, res.text                       # the original error
     row = _row(db)
-    assert (row["status"], row["closed_by"]) == ("action_taken", ADM)
+    assert (row["status"], row["closed_by"]) == ("resolved", ADM)
     assert _logged(caplog, logging.CRITICAL, "Report 1 ")
     logs = _report_logs(db)
     assert [l["type"] for l in logs] == ["report_close_unreverted"]
@@ -262,7 +262,7 @@ def test_failed_service_and_a_reopen_that_always_fails_is_flagged_critical_and_a
     critical = _logged(caplog, logging.CRITICAL, "Report 1 ")
     assert critical and critical[0].exc_info
     row = _row(db)
-    assert (row["status"], row["outcome"], row["closed_by"]) == ("action_taken", "warned", ADM)
+    assert (row["status"], row["outcome"], row["closed_by"]) == ("resolved", "warned", ADM)
     logs = _report_logs(db)
     assert [l["type"] for l in logs] == ["report_close_unreverted"]
     assert logs[0]["entity_id"] == "1" and logs[0]["created_by_id"] == ADM
@@ -318,7 +318,7 @@ def test_a_lost_claim_race_does_not_revert_and_leaves_the_other_closure(db, race
     res = _act(action="warn")
     assert race.fired, "the claim never touched the reports table"
     assert res.status_code == 409 and _code(res) == "report_closed"
-    assert spy.hits == 1 and len(updates) == 1 and updates[0]["status"] == "action_taken"   # the claim only
+    assert spy.hits == 1 and len(updates) == 1 and updates[0]["status"] == "resolved"   # the claim only
     row = _row(db)
     assert (row["status"], row["outcome"], row["closed_by"], row["closed_at"]) == \
            ("dismissed", "dismissed", ADM2, OLD_CLOSE)
@@ -340,7 +340,7 @@ def test_the_revert_never_reopens_a_closure_of_another_administrator(db, inject,
     assert res.status_code == 503, res.text
     row = _row(db)
     assert (row["status"], row["outcome"], row["closed_by"], row["closed_at"]) == \
-           ("action_taken", "warned", ADM2, OLD_CLOSE)
+           ("resolved", "warned", ADM2, OLD_CLOSE)
     assert not _logged(caplog, logging.CRITICAL, "Report 1 ")
 
 
@@ -370,7 +370,7 @@ def test_details_failing_once_are_retried_and_the_normal_body_is_returned(db, in
     load = inject(_reports_details_read, RuntimeError("blip"), skip=1, times=1)
     res = _dismiss() if what == "dismiss" else _act(action="warn")
     assert load.hits == 1, "the failure was never injected"
-    status, outcome = ("dismissed", "dismissed") if what == "dismiss" else ("action_taken", "warned")
+    status, outcome = ("dismissed", "dismissed") if what == "dismiss" else ("resolved", "warned")
     _assert_closed_response(db, res, 1, status, outcome)                # the full live body, like GET
 
 
@@ -383,19 +383,21 @@ def test_details_failing_every_time_still_answers_200_with_a_fallback_body(db, i
         res = _act(action=action, reason=None if action == "remove_content" else REASON)
     assert load.hits == 2, "the details must be tried twice"
     removed = action == "remove_content"
-    body = _fallback_checks(db, res, "action_taken", {"warn": "warned", "suspend": "suspended",
+    body = _fallback_checks(db, res, "resolved", {"warn": "warned", "suspend": "suspended",
                                                        "remove_content": "content_removed"}[action], removed)
     assert len(_logged(caplog, logging.ERROR, "Could not load the details of report 1")) == 2
     row = _row(db)
     if kind == "message":                                               # stored as is for a chat report
         assert body.event.id == EV1 and body.chat_context == row["chat_context"]
         assert body.reported.message.id == MSG
+        assert body.reported.event.id == EV1
+    elif kind == "event":
+        assert body.event.id == EV1 and body.chat_context is None
+        assert body.reported.event.id == EV1
     else:
         assert body.event is None and body.chat_context is None
     if kind == "user":
         assert body.reported.user.id == TOM
-    if kind == "event":
-        assert body.reported.event.id == EV1
     # the action itself happened
     if action == "warn":
         assert len(_warnings(db)) == 1
@@ -544,7 +546,7 @@ def test_removal_incomplete_keeps_the_report_closed_audits_it_and_raises_the_err
     assert detail["code"] == "removal_incomplete" and "Tell a developer" in detail["message"]
     assert row(db)["removed_at"] is not None and row(db)["removed_by"] == ADM    # the removal stands
     report = _row(db)
-    assert (report["status"], report["outcome"], report["closed_by"]) == ("action_taken", "content_removed", ADM)
+    assert (report["status"], report["outcome"], report["closed_by"]) == ("resolved", "content_removed", ADM)
     assert report["closed_at"] is not None
     logs = _report_logs(db)
     assert [l["action"] if "action" in l else l["type"] for l in logs] == ["report_action_taken"]

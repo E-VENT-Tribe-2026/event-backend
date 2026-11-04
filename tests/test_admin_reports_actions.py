@@ -320,6 +320,22 @@ def race(monkeypatch):
 
 # ==== dismiss =====================================================================================
 
+def test_dismiss_still_closes_when_postgrest_returns_no_updated_row(db, monkeypatch):
+    """Production UPDATE can succeed with an empty body; that must not leave the report open."""
+    _seed(db, "event")
+    original = _fake_supabase.FakeQuery.execute
+
+    def execute(self):
+        result = original(self)
+        if self.name == "reports" and self.action == "update":
+            return SimpleNamespace(data=[], count=None)
+        return result
+
+    monkeypatch.setattr(_fake_supabase.FakeQuery, "execute", execute)
+    res = _dismiss()
+    _assert_closed_response(db, res, 1, "dismissed", "dismissed")
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_dismiss_open_report_closes_it_with_all_fields_and_audit(db, kind):
     _seed(db, kind)
@@ -406,7 +422,7 @@ def test_dismiss_conflict_when_another_admin_closes_it_first(db, race):
 def test_warn_from_a_user_report_warns_the_reported_user_about_the_profile(db):
     _seed(db, "user")
     res = _act(action="warn")
-    _assert_closed_response(db, res, 1, "action_taken", "warned")
+    _assert_closed_response(db, res, 1, "resolved", "warned")
     warnings = _warnings(db)
     assert len(warnings) == 1
     w = warnings[0]
@@ -418,7 +434,7 @@ def test_warn_from_a_user_report_warns_the_reported_user_about_the_profile(db):
 def test_warn_from_a_message_report_warns_the_message_author_about_the_message(db):
     _seed(db, "message")
     res = _act(action="warn")
-    _assert_closed_response(db, res, 1, "action_taken", "warned")
+    _assert_closed_response(db, res, 1, "resolved", "warned")
     warnings = _warnings(db)
     assert [w["user_id"] for w in warnings] == [TOM]
     assert (warnings[0]["about_type"], str(warnings[0]["about_id"])) == ("chat_message", str(MSG))
@@ -430,7 +446,7 @@ def test_warn_from_a_message_report_warns_the_message_author_about_the_message(d
 def test_warn_from_an_event_report_warns_the_organizer_not_the_reporter_or_participants(db):
     _seed(db, "event")
     res = _act(action="warn")
-    _assert_closed_response(db, res, 1, "action_taken", "warned")
+    _assert_closed_response(db, res, 1, "resolved", "warned")
     warnings = _warnings(db)
     assert [w["user_id"] for w in warnings] == [TOM]                # TOM organizes EV1; MIA reported, ANA joined
     assert (warnings[0]["about_type"], str(warnings[0]["about_id"])) == ("event", EV1)
@@ -460,7 +476,7 @@ def test_warn_does_not_suspend_or_remove_anything(db):
 def test_suspend_suspends_the_reported_user_or_the_organizer(db, kind):
     _seed(db, kind)
     res = _act(action="suspend", reason="Harassment in chats")
-    _assert_closed_response(db, res, 1, "action_taken", "suspended")
+    _assert_closed_response(db, res, 1, "resolved", "suspended")
     tom = _profile_row(db, TOM)
     assert tom["suspended_at"] is not None and tom["suspension_reason"] == "Harassment in chats"
     for uid in (MIA, ANA, ADM, ADM2):
@@ -481,7 +497,7 @@ def test_suspend_from_an_event_report_suspends_the_organizer_not_the_reporter(db
 def test_remove_content_from_an_event_report_removes_the_event_and_warns_the_organizer(db):
     _seed(db, "event")
     res = _act(action="remove_content", reason=None)
-    _assert_closed_response(db, res, 1, "action_taken", "content_removed")
+    _assert_closed_response(db, res, 1, "resolved", "content_removed")
     ev = _event_row(db)
     assert ev["removed_at"] is not None and ev["removed_by"] == ADM
     assert _event_row(db, EV2)["removed_at"] is None
@@ -499,7 +515,7 @@ def test_remove_content_from_an_event_report_removes_the_event_and_warns_the_org
 def test_remove_content_from_a_message_report_removes_the_message_and_warns_the_author(db):
     _seed(db, "message")
     res = _act(action="remove_content", reason=None)
-    _assert_closed_response(db, res, 1, "action_taken", "content_removed")
+    _assert_closed_response(db, res, 1, "resolved", "content_removed")
     msg = _chat_row(db)
     assert msg["removed_at"] is not None and msg["removed_by"] == ADM
     assert _chat_row(db, OTHER_MSG)["removed_at"] is None
@@ -587,7 +603,7 @@ def test_remove_content_when_the_owner_is_an_administrator_removes_without_a_war
     _seed(db, kind)
     _make_admin(db)                                                  # TOM is now an administrator
     res = _act(action="remove_content", reason=None)
-    _assert_closed_response(db, res, 1, "action_taken", "content_removed")
+    _assert_closed_response(db, res, 1, "resolved", "content_removed")
     if kind == "event":
         assert _event_row(db)["removed_at"] is not None
     else:
@@ -839,7 +855,7 @@ def test_warn_failing_after_the_claim_reverts_it_and_returns_the_original_error(
     # the report really is open again: a retry works
     fail.disarm()
     res = _act(action="warn")
-    _assert_closed_response(db, res, 1, "action_taken", "warned")
+    _assert_closed_response(db, res, 1, "resolved", "warned")
     assert len(_warnings(db)) == 1
 
 
@@ -911,7 +927,7 @@ def test_details_show_outcome_closer_and_time_after_each_outcome(db, kind, actio
     res = _do(action)
     assert res.status_code == 200, res.text
     body = _detail()
-    assert body["status"] == "action_taken" and body["outcome"] == ACTION_OUTCOME[action]
+    assert body["status"] == "resolved" and body["outcome"] == ACTION_OUTCOME[action]
     assert body["closed_by"]["id"] == ADM and body["closed_by"]["username"] == "boss"
     assert body["closed_at"] == str(_row(db)["closed_at"])
 
@@ -1016,7 +1032,7 @@ def test_real_chain_administrator_with_mfa_succeeds_without_a_redirect(mock_sb, 
     headers = _real_chain(mock_sb, "administrator", "aal2")
     res = _post(url, body, headers)
     assert res.status_code == 200, f"{url}: {res.status_code} {res.text}"
-    assert res.json()["status"] in ("dismissed", "action_taken")
+    assert res.json()["status"] in ("dismissed", "resolved")
     assert res.json()["closed_by"]["id"] == ADM
     assert _row(db)["closed_by"] == ADM
 

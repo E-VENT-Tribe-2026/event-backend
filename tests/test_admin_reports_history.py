@@ -192,7 +192,7 @@ def test_about_event_report_about_an_event_the_user_organizes_is_marked_with_the
     about = _history()["about"]
     assert _ids(about) == [1]
     entry = about[0]
-    assert entry["target_type"] == "event" and entry["status"] == "action_taken"
+    assert entry["target_type"] == "event" and entry["status"] == "resolved"
     assert entry["reason"] == "misleading_event"
     assert entry["event"]["id"] == EV_TOM and entry["event"]["title"] == "Board game night"
     assert set(entry) == BASE_KEYS | {"event"}
@@ -254,7 +254,7 @@ def test_user_organizing_an_event_with_several_reports_about_it(db):
          _report(4, "2026-10-04T10:00:00+00:00", event_id=EV_TOM2, reporter_id=MIA))
     about = _history()["about"]
     assert _ids(about) == [4, 3, 2, 1]
-    assert [i["status"] for i in about] == ["open", "action_taken", "dismissed", "open"]
+    assert [i["status"] for i in about] == ["open", "resolved", "dismissed", "open"]
     assert [i["event"]["id"] for i in about] == [EV_TOM2, EV_TOM, EV_TOM, EV_TOM]
     assert [i["event"]["title"] for i in about] == ["Sunset party", "Board game night",
                                                       "Board game night", "Board game night"]
@@ -267,7 +267,7 @@ def test_about_includes_every_status(db):
          _user_report(2, "2026-10-02T10:00:00+00:00", **_closed()),
          _user_report(3, "2026-10-03T10:00:00+00:00", **_closed(status="action_taken", outcome="warned")))
     about = _history()["about"]
-    assert [i["status"] for i in about] == ["action_taken", "dismissed", "open"]
+    assert [i["status"] for i in about] == ["resolved", "dismissed", "open"]
 
 
 # ---- made ----------------------------------------------------------------------------
@@ -287,7 +287,7 @@ def test_made_lists_reports_filed_by_the_user_any_status_any_target(db):
     made = hist["made"]
     assert _ids(made) == [3, 2, 1]
     assert [i["target_type"] for i in made] == ["message", "user", "event"]
-    assert [i["status"] for i in made] == ["action_taken", "dismissed", "open"]
+    assert [i["status"] for i in made] == ["resolved", "dismissed", "open"]
     assert [i["reason"] for i in made] == ["harassment_or_hate", "other", "spam"]
     assert [i["created_at"] for i in made] == ["2026-10-03T10:00:00+00:00", "2026-10-02T10:00:00+00:00",
                                                "2026-10-01T10:00:00+00:00"]

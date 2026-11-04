@@ -13,6 +13,14 @@ _LIST_COLUMNS = "id, status, reason, created_at, target_type, origin, reporter_i
 _EVENT_COLUMNS = "id, title, banner_url, created_by, removed_at"
 
 
+def public_status(value) -> str:
+    """API status: dismissed, resolved (an action was taken), or open. Legacy action_taken reads as resolved."""
+    status = str(value or "").strip().lower()
+    if status == "action_taken":
+        return "resolved"
+    return status or "open"
+
+
 def _newest_first(query):
     return query.order("created_at", desc=True).order("id", desc=True)
 
@@ -41,9 +49,11 @@ def _people_by_id(ids) -> dict:
 def _report_event_card(event: dict | None) -> dict | None:
     if not event:
         return None
+    title = event.get("title")
     return {
         "id": str(event["id"]),
-        "title": event.get("title"),
+        "title": title,
+        "name": title,
         "banner": event.get("banner_url"),
         "banner_url": event.get("banner_url"),
     }
@@ -51,12 +61,13 @@ def _report_event_card(event: dict | None) -> dict | None:
 
 def _reported(row: dict, people: dict, events: dict) -> dict:
     target = row["target_type"]
+    event_card = _report_event_card(events.get(row.get("event_id"))) if row.get("event_id") else None
     message = None
     if target == "message":
         message = {"id": row["message_id"], "event_id": row.get("event_id")}
     return {
         "type": target,
-        "event": _report_event_card(events.get(row.get("event_id"))) if target == "event" else None,
+        "event": event_card,
         "user": people.get(row.get("reported_user_id")) if target != "event" else None,
         "message": message,
     }
@@ -65,7 +76,7 @@ def _reported(row: dict, people: dict, events: dict) -> dict:
 def _item(row: dict, people: dict, events: dict) -> dict:
     return {
         "id": row["id"],
-        "status": row["status"],
+        "status": public_status(row.get("status")),
         "reason": row["reason"],
         "created_at": str(row["created_at"]),
         "target_type": row["target_type"],
@@ -166,7 +177,7 @@ def get_report_details(report_id: int) -> dict:
         from_chat = row["origin"] == "event_chat"
         detail.update({
             "description": row.get("description"),
-            "event": _report_event_card(event) if from_chat else None,
+            "event": _report_event_card(event),
             "chat_context": row.get("chat_context") if from_chat else None,
             "outcome": row.get("outcome"),
             "closed_by": people.get(row.get("closed_by")),

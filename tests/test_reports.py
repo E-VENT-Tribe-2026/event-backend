@@ -407,7 +407,7 @@ class TestAlreadyReported:
 
     def test_after_closing_the_item_can_be_reported_again(self, db):
         post()
-        for status in ("dismissed", "action_taken"):
+        for status in ("dismissed", "action_taken", "resolved"):
             db.tables["reports"][-1]["status"] = status
             assert post().status_code == 201
 
