@@ -1,4 +1,5 @@
 from typing import Any, List, Literal, Optional
+from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from app.schemas.suspension_schema import SUSPENSION_REASON_MAX_LENGTH
 from app.schemas.warning_schema import PersonSummary, WARNING_REASON_MAX_LENGTH
@@ -48,6 +49,7 @@ class AdminReportItem(BaseModel):
     origin: ReportOrigin
     reporter: Optional[PersonSummary] = None
     reported: ReportedContent
+    assigned_to: Optional[PersonSummary] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -99,6 +101,11 @@ class ReportAboutEntry(ReportHistoryEntry):
 class ReportHistory(BaseModel):
     about: List[ReportAboutEntry]
     made: List[ReportHistoryEntry]
+
+
+class ReportAssignRequest(BaseModel):
+    """Assign an open report to an administrator (self or another admin)."""
+    admin_id: UUID = Field(..., description="Administrator to assign the report to.")
 
 
 class ReportActionRequest(BaseModel):

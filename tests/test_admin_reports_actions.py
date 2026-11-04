@@ -70,7 +70,7 @@ COMBOS = ([(k, a) for a in ("warn", "suspend") for k in KINDS]
 PERSON_KEYS = {"id", "username", "full_name", "display_name", "avatar_kind", "icon_id", "avatar_url"}
 DETAIL_KEYS = {"id", "status", "reason", "description", "created_at", "origin", "reporter", "target_type",
                "reported", "event", "chat_context", "outcome", "closed_by", "closed_at", "content_removed",
-               "reported_user_is_administrator"}
+               "reported_user_is_administrator", "assigned_to"}
 
 
 # ---- world --------------------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def _report(rid, **kw):
     row = {"id": rid, "reporter_id": MIA, "target_type": "event", "event_id": EV1, "reported_user_id": None,
            "message_id": None, "reason": "spam", "description": None, "origin": "event_details",
            "status": "open", "chat_context": None, "created_at": TS,
-           "outcome": None, "closed_by": None, "closed_at": None}
+           "outcome": None, "closed_by": None, "closed_at": None, "assigned_to": ADM}
     row.update(kw)
     return row
 

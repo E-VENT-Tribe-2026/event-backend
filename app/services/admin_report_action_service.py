@@ -2,15 +2,16 @@
 
 Order of every request:
   1. load the report (404) and refuse one that is not open (409), before any other check;
-  2. validate the action with reads only, so a refusal changes nothing;
-  3. claim the report: one conditional update open -> closed, so two administrators cannot both close it;
-  4. run the existing service (warning, suspension or removal);
-  5. a failure after the claim reopens the report (only this administrator's own closure) and the
+  2. refuse unless this administrator is the assignee (403);
+  3. validate the action with reads only, so a refusal changes nothing;
+  4. claim the report: one conditional update open -> closed, so two administrators cannot both close it;
+  5. run the existing service (warning, suspension or removal);
+  6. a failure after the claim reopens the report (only this administrator's own closure) and the
      original error is raised unchanged, UNLESS the service had already done its work when it raised
      (the reused services are not atomic): then the report stays closed, the error is logged and the
      request goes on as a success, so a retry cannot warn or remove twice. When that cannot be told,
      the report stays closed and the original error is raised (CRITICAL log + audit entry for a human);
-  6. write the report-level audit entry and return the report details (a body built from what is known
+  7. write the report-level audit entry and return the report details (a body built from what is known
      when loading them fails twice, so a success is never turned into a 500).
 """
 import logging
@@ -51,6 +52,106 @@ def load_report(report_id: int) -> dict:
     if report.get("status") != "open":
         raise report_error(409, "report_closed", "This report is already closed.")
     return report
+
+
+def _same_id(a, b) -> bool:
+    return bool(a) and bool(b) and str(a).lower() == str(b).lower()
+
+
+def require_assignee(report: dict, admin_id: str) -> None:
+    assignee = report.get("assigned_to")
+    if not assignee:
+        raise report_error(403, "report_unassigned", "Assign this report to yourself before acting on it.")
+    if not _same_id(assignee, admin_id):
+        raise report_error(403, "report_assigned_to_other", "This report is assigned to another administrator.")
+
+
+def _admin_profile(admin_id: str) -> dict:
+    profile = _first(supabase.table("profiles").select("id, role").eq("id", admin_id).limit(1).execute())
+    if profile is None:
+        raise report_error(404, "admin_not_found", "That administrator does not exist.")
+    if not is_admin_role(profile.get("role")):
+        raise report_error(400, "not_an_administrator", "That account is not an administrator.")
+    return profile
+
+
+def _row_after_assign(report_id: int) -> dict:
+    row = _first(supabase.table("reports").select("*").eq("id", report_id).limit(1).execute())
+    if row is None:
+        raise report_error(404, "report_not_found", "This report does not exist.")
+    if row.get("status") != "open":
+        raise report_error(409, "report_closed", "This report is already closed.")
+    return row
+
+
+def assign_report(report_id: int, caller_id: str, admin_id: str) -> dict:
+    """Assign an open report. 409 when it is already assigned to someone else; 200 if already this admin."""
+    report = load_report(report_id)
+    target_id = str(admin_id)
+    _admin_profile(target_id)
+    current = report.get("assigned_to")
+    if _same_id(current, target_id):
+        return get_report_details(report_id)
+    if current:
+        raise report_error(409, "report_assigned", "This report is already assigned to another administrator.")
+
+    _as_service_role()
+    claimed = (
+        supabase.table("reports")
+        .update({"assigned_to": target_id})
+        .eq("id", report_id)
+        .eq("status", "open")
+        .is_("assigned_to", "null")
+        .execute()
+    )
+    if not claimed.data:
+        row = _row_after_assign(report_id)
+        if not _same_id(row.get("assigned_to"), target_id):
+            if row.get("assigned_to"):
+                raise report_error(409, "report_assigned",
+                                   "This report is already assigned to another administrator.")
+            raise report_error(500, "assign_failed", "Could not assign this report.")
+
+    record_audit(
+        action="report_assigned",
+        admin_id=caller_id,
+        entity_type="report",
+        entity_id=str(report_id),
+        description=f"Assigned report {report_id}",
+        details={"assigned_to": target_id},
+    )
+    return get_report_details(report_id)
+
+
+def unassign_report(report_id: int, admin_id: str) -> dict:
+    """Clear the assignee. Any administrator may unassign (assignee or a peer)."""
+    report = load_report(report_id)
+    previous = report.get("assigned_to")
+    if not previous:
+        return get_report_details(report_id)
+
+    _as_service_role()
+    updated = (
+        supabase.table("reports")
+        .update({"assigned_to": None})
+        .eq("id", report_id)
+        .eq("status", "open")
+        .execute()
+    )
+    if not updated.data:
+        row = _row_after_assign(report_id)
+        if row.get("assigned_to"):
+            raise report_error(500, "unassign_failed", "Could not unassign this report.")
+
+    record_audit(
+        action="report_unassigned",
+        admin_id=admin_id,
+        entity_type="report",
+        entity_id=str(report_id),
+        description=f"Unassigned report {report_id}",
+        details={"was_assigned_to": str(previous)},
+    )
+    return get_report_details(report_id)
 
 
 def _event_of(report: dict) -> dict | None:
@@ -403,6 +504,7 @@ def _fallback_details(report: dict, status_value: str, outcome: str, admin_id: s
         "closed_at": closed_at,
         "content_removed": content_removed,
         "reported_user_is_administrator": False,
+        "assigned_to": _person_ref(report.get("assigned_to")),
     }
 
 
@@ -421,6 +523,7 @@ def _details_after_close(report: dict, status_value: str, outcome: str, admin_id
 
 def dismiss_report(report_id: int, admin_id: str) -> dict:
     report = load_report(report_id)
+    require_assignee(report, admin_id)
     claimed_at = _now()
     try:
         claim(report["id"], STATUS_DISMISSED, "dismissed", admin_id, claimed_at)
@@ -442,6 +545,7 @@ def dismiss_report(report_id: int, admin_id: str) -> dict:
 
 def act_on_report(report_id: int, admin_id: str, action: str, reason: str | None, background_tasks=None) -> dict:
     report = load_report(report_id)
+    require_assignee(report, admin_id)
     outcome = _OUTCOMES[action]
     if action == "warn":
         target = validate_warn(report)

@@ -433,7 +433,14 @@ def _promote(q):
 
 
 def _suspend_elsewhere(q):
+    """Another administrator already finished suspending TOM (account + event effects)."""
     _profile_row(q.db, TOM).update(suspended_at="2026-10-15T00:00:00+00:00", suspension_reason="by ADM2")
+    for event in q.db.tables["events"]:
+        if event.get("created_by") == TOM:
+            event["status"] = "cancelled"
+    q.db.tables["event_participants"] = [
+        p for p in q.db.tables["event_participants"] if p.get("user_id") != TOM
+    ]
 
 
 def _delete_profile(q):

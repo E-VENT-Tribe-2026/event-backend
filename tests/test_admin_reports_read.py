@@ -50,7 +50,7 @@ def _report(rid, created_at, **kw):
     row = {"id": rid, "reporter_id": MIA, "target_type": "event", "event_id": EV1, "reported_user_id": None,
            "message_id": None, "reason": "spam", "description": None, "origin": "event_details",
            "status": "open", "chat_context": None, "created_at": created_at,
-           "outcome": None, "closed_by": None, "closed_at": None}
+           "outcome": None, "closed_by": None, "closed_at": None, "assigned_to": None}
     row.update(kw)
     return row
 
@@ -216,11 +216,13 @@ def test_event_report_item(db):
     for items in _both_lists():
         assert len(items) == 1
         item = items[0]
-        assert {"id", "status", "reason", "created_at", "target_type", "origin", "reporter", "reported"} <= set(item)
+        assert {"id", "status", "reason", "created_at", "target_type", "origin", "reporter", "reported",
+                "assigned_to"} <= set(item)
         assert (item["id"], item["status"], item["reason"], item["target_type"], item["origin"]) == \
                (1, "open", "spam", "event", "event_details")
         assert PERSON_KEYS <= set(item["reporter"])
         assert item["reporter"]["id"] == MIA and item["reporter"]["username"] == "mia"
+        assert item["assigned_to"] is None
         rep = item["reported"]
         assert rep["type"] == "event" and rep["user"] is None and rep["message"] is None
         assert rep["event"]["id"] == EV1 and rep["event"]["title"] == "Board game night"
@@ -253,6 +255,16 @@ def test_message_report_item(db):
         assert rep["user"]["id"] == TOM and rep["user"]["username"] == "tom"
         assert rep["event"]["id"] == EV1 and rep["event"]["title"] == "Board game night"
         assert rep["event"]["name"] == "Board game night"
+
+
+def test_list_and_detail_show_assignee(db):
+    _put(db, _report(1, "2026-10-01T10:00:00+00:00", assigned_to=ADM))
+    for items in _both_lists():
+        assignee = items[0]["assigned_to"]
+        assert PERSON_KEYS <= set(assignee)
+        assert assignee["id"] == ADM and assignee["username"] == "boss"
+    body = _detail(1)
+    assert body["assigned_to"]["id"] == ADM and body["assigned_to"]["username"] == "boss"
 
 
 def test_deleted_reporter_gives_null(db):
@@ -289,7 +301,7 @@ def test_deleted_message_author_gives_null_user(db):
 
 DETAIL_KEYS = {"id", "status", "reason", "description", "created_at", "origin", "reporter", "target_type",
                "reported", "event", "chat_context", "outcome", "closed_by", "closed_at", "content_removed",
-               "reported_user_is_administrator"}
+               "reported_user_is_administrator", "assigned_to"}
 
 
 def _detail(rid):
@@ -311,6 +323,7 @@ def test_details_event_report_from_event_details(db):
     assert body["event"]["name"] == "Board game night"
     assert body["chat_context"] is None
     assert body["outcome"] is None and body["closed_by"] is None and body["closed_at"] is None
+    assert body["assigned_to"] is None
     assert body["content_removed"] is False and body["reported_user_is_administrator"] is False
 
 
@@ -908,3 +921,6 @@ def test_openapi_exposes_report_vocabularies_as_enums():
     outcome = schemas["AdminReportDetailResponse"]["properties"]["outcome"]
     assert _enum_of(outcome) == ["dismissed", "warned", "content_removed", "suspended"]
     assert _enum_of(schemas["ReportedContent"]["properties"]["type"]) == ["event", "user", "message"]
+    assert "assigned_to" in schemas["AdminReportItem"]["properties"]
+    assert "assigned_to" in schemas["AdminReportDetailResponse"]["properties"]
+    assert "admin_id" in schemas["ReportAssignRequest"]["properties"]

@@ -9,7 +9,8 @@ from app.services.report_service import report_error
 
 logger = logging.getLogger(__name__)
 
-_LIST_COLUMNS = "id, status, reason, created_at, target_type, origin, reporter_id, event_id, reported_user_id, message_id"
+_LIST_COLUMNS = ("id, status, reason, created_at, target_type, origin, reporter_id, event_id, "
+                "reported_user_id, message_id, assigned_to")
 _EVENT_COLUMNS = "id, title, banner_url, created_by, removed_at"
 
 
@@ -83,12 +84,15 @@ def _item(row: dict, people: dict, events: dict) -> dict:
         "origin": row["origin"],
         "reporter": people.get(row.get("reporter_id")),
         "reported": _reported(row, people, events),
+        "assigned_to": people.get(row.get("assigned_to")),
     }
 
 
 def _items(rows: list[dict]) -> list[dict]:
     """Report entries with their people and events loaded in two batched queries."""
-    people = _people_by_id([i for r in rows for i in (r.get("reporter_id"), r.get("reported_user_id"))])
+    people = _people_by_id([
+        i for r in rows for i in (r.get("reporter_id"), r.get("reported_user_id"), r.get("assigned_to"))
+    ])
     events = _events_by_id([r.get("event_id") for r in rows])
     return [_item(r, people, events) for r in rows]
 
@@ -162,7 +166,9 @@ def get_report_details(report_id: int) -> dict:
 
         target = row["target_type"]
         event = _events_by_id([row.get("event_id")]).get(row.get("event_id"))
-        people = _people_by_id([row.get("reporter_id"), row.get("reported_user_id"), row.get("closed_by")])
+        people = _people_by_id([
+            row.get("reporter_id"), row.get("reported_user_id"), row.get("closed_by"), row.get("assigned_to"),
+        ])
         detail = _item(row, people, {row.get("event_id"): event} if event else {})
 
         if target == "event":

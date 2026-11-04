@@ -33,9 +33,15 @@ from app.schemas.admin_report_schema import (
     AdminReportListResponse,
     AdminReportOpenListResponse,
     ReportActionRequest,
+    ReportAssignRequest,
 )
 from app.services.admin_report_service import get_report_details, list_open_reports, list_reports
-from app.services.admin_report_action_service import act_on_report, dismiss_report
+from app.services.admin_report_action_service import (
+    act_on_report,
+    assign_report,
+    dismiss_report,
+    unassign_report,
+)
 from app.schemas.warning_schema import (
     GiveWarningRequest,
     WarningHistoryItem,
@@ -377,13 +383,34 @@ def get_report(
     return get_report_details(report_id=report_id)
 
 
+@router.post("/reports/{report_id}/assign", response_model=AdminReportDetailResponse)
+@_slash("/reports/{report_id}/assign", ["POST"], response_model=AdminReportDetailResponse)
+def post_assign_report(
+    body: ReportAssignRequest,
+    report_id: int = Path(..., le=9223372036854775807, description="Report to assign"),
+    admin=Depends(require_admin),
+):
+    """Assigns an open report to an administrator (self or another admin). 409 if already assigned to someone else."""
+    return assign_report(report_id=report_id, caller_id=admin.id, admin_id=str(body.admin_id))
+
+
+@router.post("/reports/{report_id}/unassign", response_model=AdminReportDetailResponse)
+@_slash("/reports/{report_id}/unassign", ["POST"], response_model=AdminReportDetailResponse)
+def post_unassign_report(
+    report_id: int = Path(..., le=9223372036854775807, description="Report to unassign"),
+    admin=Depends(require_admin),
+):
+    """Clears the assignee. The assignee or any other administrator may unassign. Refused when the report is closed."""
+    return unassign_report(report_id=report_id, admin_id=admin.id)
+
+
 @router.post("/reports/{report_id}/dismiss", response_model=AdminReportDetailResponse)
 @_slash("/reports/{report_id}/dismiss", ["POST"], response_model=AdminReportDetailResponse)
 def post_dismiss_report(
     report_id: int = Path(..., le=9223372036854775807, description="Report to dismiss"),
     admin=Depends(require_admin),
 ):
-    """Closes an open report without any action. Refused when the report is already closed."""
+    """Closes an open report without any action. Refused when the report is closed or the caller is not the assignee."""
     return dismiss_report(report_id=report_id, admin_id=admin.id)
 
 
@@ -398,6 +425,7 @@ def post_report_action(
     """
     Acts on an open report: warn or suspend the reported user (for an event, its organizer), or remove
     the reported event or message. A reason is required for warn and suspend. Closes the report.
+    Refused unless the caller is the assignee.
     """
     return act_on_report(report_id=report_id, admin_id=admin.id, action=body.action, reason=body.reason,
                          background_tasks=background_tasks)
