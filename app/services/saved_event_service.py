@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from app.db.supabase_client import supabase
 from app.services.block_visibility import filter_hidden_events
+from app.services.removed_content import filter_removed_events
 
 
 def save_event(user_id: str, event_id: str):
@@ -38,4 +39,4 @@ def get_saved_events(user_id: str):
         .execute()
 
     events = [item["events"] for item in response.data if item.get("events")]
-    return filter_hidden_events(events, user_id)
+    return filter_hidden_events(filter_removed_events(events), user_id)

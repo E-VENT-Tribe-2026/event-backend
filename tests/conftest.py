@@ -1,3 +1,5 @@
+import os
+os.environ["TESTING"] = "true"
 import pytest
 from unittest.mock import patch
 
@@ -25,4 +27,17 @@ def no_blocks_by_default():
     chains["user_blocks"].execute.return_value.data = []
     chains["event_participants"].execute.return_value.data = []
     with patch("app.services.block_visibility.supabase", mock_sb):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def no_removed_content_by_default():
+    """Tests of other features run as if no event is removed.
+
+    Without this, the removed-content lookups would query the real database. Tests of
+    removals patch app.services.removed_content.supabase themselves, which overrides this.
+    """
+    mock_sb, chains = make_table_router()
+    chains["events"].execute.return_value.data = []
+    with patch("app.services.removed_content.supabase", mock_sb):
         yield

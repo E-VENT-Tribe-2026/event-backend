@@ -26,3 +26,27 @@ name = "Database Migration Ordering ADR"
 path = "docs/architecture/ADR/ADR-001-database-migrations-ordering.md"
 kind = "ADR"
 traceability = "FULL"
+name = "Suspension Protection and Cancellation Reasons ADR"
+path = "docs/architecture/ADR/ADR-002-suspension-protection-and-cancellation-reasons.md"
+kind = "ADR"
+traceability = "FULL"
+artifacts_dir = "architecture"
+children = []
+
+[[systems.artifacts]]
+name = "Product Orientation Assistant Tool Specification"
+path = "docs/agent-tool-specification.md"
+kind = "DESIGN"
+traceability = "FULL"
+
+[[systems.artifacts]]
+name = "Caller Identity Forwarding and Blocking Visibility"
+path = "architecture/ADR/0001-caller-identity-and-blocking-visibility.md"
+kind = "ADR"
+traceability = "FULL"
+
+[[systems.codebase]]
+name = "Backend Application"
+path = "app"
+extensions = [".py"]
+single_line_comments = ["#"]
