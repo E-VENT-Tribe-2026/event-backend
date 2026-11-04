@@ -17,13 +17,13 @@ router = APIRouter()
 
 
 @router.post("/chat", response_model=AssistantChatResponse)
-def chat(body: AssistantChatRequest, _user=Depends(get_current_user)):
-    return AssistantChatResponse(reply=generate_reply(body.messages))
+def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
+    return AssistantChatResponse(reply=generate_reply(body.messages, getattr(user, "id", None), user=user))
 
 
 @router.post("/tools/search-events", response_model=SearchEventsResponse)
-def search_events_tool(body: Any = Body(...), _user=Depends(get_current_user)):
-    return search_events(body)
+def search_events_tool(body: Any = Body(...), user=Depends(get_current_user)):
+    return search_events(body, getattr(user, "id", None))
 
 
 @router.post("/tools/event-details", response_model=EventDetailsResponse)
