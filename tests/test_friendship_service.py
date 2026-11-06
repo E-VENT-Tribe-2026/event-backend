@@ -278,6 +278,31 @@ class TestSendFriendRequest:
         assert exc.value.detail["code"] == "already_friends"
         m["create_notification"].assert_not_called()
 
+    @pytest.mark.parametrize("sender_blocked_receiver, status, code", [
+        (False, 404, "user_not_found"),   # receiver blocked the sender meanwhile
+        (True, 403, "user_blocked"),      # sender blocked the receiver meanwhile
+    ])
+    def test_trigger_users_blocked_after_checks(self, sender_blocked_receiver, status, code):
+        """#227: a block that lands between the checks and the insert is refused by the trigger."""
+        mock_sb, chains = make_table_router()
+        chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
+
+        class TriggerError(Exception):
+            code = "P0001"
+            message = "users_blocked"
+
+        chains["friend_requests"].execute.side_effect = [TriggerError("users_blocked")]
+        with svc(mock_sb, state=True) as m, patch(f"{MOD}.has_blocked") as has_blocked:
+            # Two checks before the insert pass; the re-check after the trigger error sees the block.
+            has_blocked.side_effect = [False, False, sender_blocked_receiver]
+            m["get_friendship_state"].return_value = {"status": "none", "request_id": None}
+            from app.services.friendship_service import send_friend_request
+            with pytest.raises(HTTPException) as exc:
+                send_friend_request(ME, OTHER)
+        assert exc.value.status_code == status
+        assert exc.value.detail["code"] == code
+        m["create_notification"].assert_not_called()
+
     def test_other_insert_error_is_send_failed_500(self):
         mock_sb, chains = make_table_router()
         chains["profiles"].execute.return_value = MagicMock(data=[{"id": OTHER}])
@@ -795,6 +820,53 @@ class TestGetFriends:
             result = get_friends(ME, page=1, limit=2)
         assert result["has_more"] is False
         assert len(result["data"]) == 2
+
+
+class TestGetUserFriendsSummaryPage:
+    FRIEND_IDS = [f"aaaaaaaa-aaaa-4aaa-8aaa-{i:012d}" for i in range(1, 16)]
+    HIDDEN = FRIEND_IDS[0]
+
+    def _rows(self):
+        return [
+            {
+                "id": i,
+                "user_id": ME,
+                "friend_id": fid,
+                "created_at": f"2026-03-{i:02d}T00:00:00+00:00",
+            }
+            for i, fid in enumerate(self.FRIEND_IDS, start=1)
+        ]
+
+    def _page(self, hidden, page, limit):
+        mock_sb, chains = make_table_router()
+        chains["friendships"].execute.return_value = MagicMock(data=self._rows())
+        with svc(mock_sb), patch(f"{MOD}.get_hidden_user_ids", return_value=set(hidden)):
+            from app.services.friendship_service import get_user_friends_summary_page
+            result = get_user_friends_summary_page(ME, page=page, limit=limit, viewer_id=OTHER)
+        chains["friendships"].range.assert_not_called()
+        return result
+
+    def test_blocked_friend_does_not_shrink_the_first_page(self):
+        result = self._page([self.HIDDEN], page=1, limit=10)
+        ids = [row["id"] for row in result["data"]]
+        assert self.HIDDEN not in ids
+        assert len(ids) == 10
+        assert result["has_more"] is True
+        assert ids == self.FRIEND_IDS[1:11]
+
+    def test_second_page_returns_the_remaining_visible_friends(self):
+        first = self._page([self.HIDDEN], page=1, limit=10)
+        second = self._page([self.HIDDEN], page=2, limit=10)
+        ids = [row["id"] for row in first["data"]] + [row["id"] for row in second["data"]]
+        assert ids == self.FRIEND_IDS[1:]
+        assert second["has_more"] is False
+        assert len(second["data"]) == 4
+
+    def test_has_more_is_false_when_every_visible_friend_fits(self):
+        result = self._page([self.HIDDEN], page=1, limit=20)
+        assert len(result["data"]) == 14
+        assert result["has_more"] is False
+        assert self.HIDDEN not in [row["id"] for row in result["data"]]
 
 
 class TestRemoveFriend:

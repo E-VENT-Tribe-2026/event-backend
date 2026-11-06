@@ -341,12 +341,40 @@ def get_public_profile(user_id: str):
     return profile
 
 
+def _redact_friends_only_search_rows(rows: list, viewer_id: str) -> list:
+    """Hide biography on friends-only profiles the viewer is not friends with."""
+    needs_redaction = [
+        row for row in rows
+        if str(row.get("visibility") or "").strip().lower() == "friends_only"
+    ]
+    if not needs_redaction:
+        return rows
+
+    from app.services.friendship_service import get_friend_ids
+    try:
+        friend_ids = {str(fid).strip().lower() for fid in get_friend_ids(viewer_id)}
+    except Exception:
+        logger.error("Could not load friend ids for search privacy; hiding friends-only biographies")
+        friend_ids = set()
+
+    presented = []
+    for row in rows:
+        item = dict(row)
+        visibility = str(item.get("visibility") or "").strip().lower()
+        owner_id = str(item.get("id") or "").strip().lower()
+        if visibility == "friends_only" and owner_id not in friend_ids:
+            item.pop("bio", None)
+        presented.append(item)
+    return presented
+
+
 def search_profiles(query: str, page: int, limit: int, viewer_id: str):
     """
-    Search public profiles by username, always excluding the viewer and administrator accounts.
-    Returns only public profiles. PostgREST treats '*' as '%' in like/ilike
-    and usernames never contain '*', so '*' is stripped from the query; a
-    query that is empty afterwards returns an empty page without querying.
+    Search public and friends-only profiles by username, always excluding the viewer
+    and administrator accounts. Friends-only biographies are omitted unless the
+    viewer is a friend. PostgREST treats '*' as '%' in like/ilike and usernames
+    never contain '*', so '*' is stripped from the query; a query that is empty
+    afterwards returns an empty page without querying.
     """
     query = query.replace("*", "")
     if not query:
@@ -373,9 +401,10 @@ def search_profiles(query: str, page: int, limit: int, viewer_id: str):
     response = q.order("username").order("id").range(start, start + limit).execute()
 
     rows = response.data or []
+    page_rows = rows[:limit]
     return {
         "page": page,
         "limit": limit,
         "has_more": len(rows) > limit,
-        "data": rows[:limit]
+        "data": _redact_friends_only_search_rows(page_rows, viewer_id),
     }

@@ -430,6 +430,58 @@ class TestSearchProfiles:
         assert result["has_more"] is False
         assert result["data"] == rows
 
+    @patch("app.services.profile_service.supabase")
+    @patch("app.services.friendship_service.get_friend_ids", return_value=[])
+    def test_hides_bio_on_friends_only_profiles_for_non_friends(self, _friends, mock_sb):
+        rows = [{
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "username": "alex",
+            "full_name": "Alex Smith",
+            "bio": "Adventurer and coder",
+            "visibility": "friends_only",
+        }]
+        mock_sb.table.return_value = _search_chain(rows)
+
+        from app.services.profile_service import search_profiles
+        result = search_profiles("alex", 1, 10, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+
+        assert len(result["data"]) == 1
+        found = result["data"][0]
+        assert found["username"] == "alex"
+        assert found["visibility"] == "friends_only"
+        assert "bio" not in found
+
+    @patch("app.services.profile_service.supabase")
+    @patch("app.services.friendship_service.get_friend_ids", return_value=["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])
+    def test_keeps_bio_on_friends_only_profiles_for_friends(self, _friends, mock_sb):
+        rows = [{
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "username": "alex",
+            "bio": "Adventurer and coder",
+            "visibility": "friends_only",
+        }]
+        mock_sb.table.return_value = _search_chain(rows)
+
+        from app.services.profile_service import search_profiles
+        result = search_profiles("alex", 1, 10, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+
+        assert result["data"][0]["bio"] == "Adventurer and coder"
+
+    @patch("app.services.profile_service.supabase")
+    def test_keeps_bio_on_public_profiles(self, mock_sb):
+        rows = [{
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "username": "alex",
+            "bio": "Adventurer and coder",
+            "visibility": "public",
+        }]
+        mock_sb.table.return_value = _search_chain(rows)
+
+        from app.services.profile_service import search_profiles
+        result = search_profiles("alex", 1, 10, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+
+        assert result["data"][0]["bio"] == "Adventurer and coder"
+
 
 class TestGetUsername:
     @patch("app.services.profile_service.supabase")

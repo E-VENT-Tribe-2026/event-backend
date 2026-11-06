@@ -235,3 +235,31 @@ def test_assistant_chat_does_not_query_supabase_tables():
 
     assert response.status_code == 200
     supabase.table.assert_not_called()
+
+def test_assistant_chat_includes_minimal_user_context_in_prompt():
+    user = SimpleNamespace(
+        id="user-123",
+        email="test@example.com",
+        user_metadata={"full_name": "Alice Developer", "interests": ["music", "tech"]},
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
+            "app.services.assistant_service.OpenAI"
+        ) as openai_client:
+            openai_client.return_value.chat.completions.create.return_value = _provider_response()
+
+            response = client.post(
+                "/api/assistant/chat",
+                json={"messages": [{"role": "user", "content": "What events do you recommend?"}]},
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        assert response.status_code == 200
+        call = openai_client.return_value.chat.completions.create.call_args
+        system_prompt = call.kwargs["messages"][0]["content"]
+        assert "Authenticated User:" in system_prompt
+        assert "Alice Developer" in system_prompt
+        assert "user-123" in system_prompt
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")

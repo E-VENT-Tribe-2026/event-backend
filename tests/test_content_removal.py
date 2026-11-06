@@ -31,7 +31,7 @@ SERVICE_MODULES = [
     "content_removal_service", "warning_service", "audit_service", "notification_service",
     "removed_content", "event_service", "chat_service", "admin_service", "saved_event_service",
     "participant_service", "event_search_service", "event_details_service", "recommendation_service",
-    "profile_service", "invitation_service", "report_service",
+    "profile_service", "invitation_service", "report_service", "admin_report_history_service",
 ]
 
 client = TestClient(app)
@@ -493,18 +493,26 @@ class TestChatOfRemovedEvent:
 
 
 class TestRemovedMessageInChat:
-    def test_everyone_in_the_chat_gets_it_as_removed_without_text(self, db):
+    def test_everyone_in_the_chat_gets_the_administrator_removed_placeholder(self, db):
         target = msg(db, "you are all")
         remove_message(target["id"])
         for viewer in (P1, P2, ORG):  # a participant, the sender and the organizer
             current["id"] = viewer
             data = client.get(f"/api/chats/{EVENT}/messages", headers=HEADERS).json()["data"]
             removed = next(m for m in data if m["id"] == target["id"])
-            assert removed["is_removed"] is True and removed["removed_at"] and removed["content"] == ""
-            assert "idiots" not in str(removed) and "removed_by" not in removed
+            assert removed["is_removed"] is True and removed["removed_at"]
+            assert removed["content"] == "This message was removed by the administrator."
+            assert removed["removed_by"]["id"] == ADMIN
+            assert removed["removed_by"]["full_name"] == "Root"
+            assert removed["removed_by"]["username"] is None  # administrators are shown by name only
+            assert removed["removed_by_name"] == "Root"
+            assert "idiots" not in str(removed)
+            assert target["content"].startswith("you are all") and target in db.tables["event_chats"]
+            assert target["removed_by"] == ADMIN
             assert removed["sender_id"] == P2 and removed["sender"]["id"] == P2
             normal = next(m for m in data if m["content"] == "hello all")
             assert normal["is_removed"] is False and normal["removed_at"] is None
+            assert normal["removed_by"] is None and normal["removed_by_name"] is None
 
     def test_removed_message_cannot_be_edited_or_deleted_even_by_its_sender(self, db):
         target = msg(db, "you are all")

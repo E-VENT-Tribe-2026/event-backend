@@ -27,6 +27,22 @@ MAIN_AGENT_PROMPT = (
 
 
 class MainAgent:
+    @classmethod
+    def _get_system_prompt(cls, state: AgentState) -> str:
+        """Return the system prompt, with the signed-in user and the current draft when present."""
+        prompt = MAIN_AGENT_PROMPT
+        user_data = state.get("user")
+        if user_data:
+            prompt += f"\n\nAuthenticated User:\n{json.dumps(user_data)}"
+        slots = state.get("entity_slots") or {}
+        if slots:
+            prompt += (
+                "\n\nCurrent event draft:\n"
+                + json.dumps(slots)
+                + "\nApply the user's latest change by calling draft_new_event with only the fields that changed."
+            )
+        return prompt
+
     """
     MainAgent powered by LLM reasoning with a single system prompt.
     All intent classification, slot tracking, clarification, and tool decisions
@@ -46,15 +62,7 @@ class MainAgent:
 
         # Build prompt messages for the LLM
         messages = state.get("messages", [])
-        system_prompt = MAIN_AGENT_PROMPT
-        slots = state.get("entity_slots") or {}
-        if slots:
-            system_prompt += (
-                "\n\nCurrent event draft:\n"
-                + json.dumps(slots)
-                + "\nApply the user's latest change by calling draft_new_event with only the fields that changed."
-            )
-        prompt_messages = [{"role": "system", "content": system_prompt}]
+        prompt_messages = [{"role": "system", "content": cls._get_system_prompt(state)}]
         prompt_messages.extend(messages)
 
         # Call the LLM to perform intent classification, clarification, or tool dispatch
@@ -182,7 +190,7 @@ class MainAgent:
         try:
             messages = state.get("messages", [])
             prompt_messages = [
-                {"role": "system", "content": MAIN_AGENT_PROMPT},
+                {"role": "system", "content": cls._get_system_prompt(state)},
                 *messages,
                 {
                     "role": "system",

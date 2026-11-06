@@ -106,11 +106,55 @@ def verify_registration_invite(email: str, code: str) -> dict:
     return {"valid": True, "email": normalize_invite_email(email)}
 
 
+def _auth_email_in_use(email: str) -> bool:
+    """True when an auth user already has this email (case-insensitive)."""
+    import httpx
+
+    if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
+        raise RuntimeError("Supabase is not configured.")
+
+    resp = httpx.get(
+        f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users",
+        headers={
+            "apikey": settings.SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+        },
+        params={"page": 1, "per_page": 200, "filter": email},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        logger.error("Auth admin user lookup failed: %s %s", resp.status_code, resp.text)
+        raise RuntimeError(f"Auth admin returned {resp.status_code}")
+
+    users = resp.json().get("users") or []
+    return any(
+        normalize_invite_email(user.get("email")) == email
+        for user in users
+        if isinstance(user, dict)
+    )
+
+
 def send_registration_invite(admin_id: str, email: EmailStr | str) -> dict:
     """Create or refresh a signup invite and email the code to the invited person."""
     normalized_email = normalize_invite_email(str(email))
     if not normalized_email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required.")
+
+    try:
+        taken = _auth_email_in_use(normalized_email)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Could not check whether {normalized_email} is already registered: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not verify whether this email is already registered.",
+        )
+    if taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email already belongs to an existing user.",
+        )
 
     code = generate_invite_code()
     expires_at = _now() + INVITE_TTL

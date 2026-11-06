@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List
 
 from app.core.input_limits import BIO_MAX_LENGTH
@@ -103,5 +103,8 @@ class UserSummary(BaseModel):
 class ProfileFriendsPage(BaseModel):
     page: int
     limit: int
-    has_more: bool
+    has_more: bool = Field(
+        ...,
+        description="True when more visible friends exist after this page. Blocked users are excluded before pagination.",
+    )
     data: List[UserSummary]

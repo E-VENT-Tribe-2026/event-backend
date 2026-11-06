@@ -100,6 +100,51 @@ class TestParticipantRoutesRequireVerifiedAuth:
         assert count.json() == {"event_id": "e1", "count": 2}
 
 
+class TestGoogleOauthUserResolution:
+    def test_verified_google_jwt_is_accepted_when_get_user_fails(self):
+        from fastapi.security import HTTPAuthorizationCredentials
+        from app.core.dependencies import get_current_user
+
+        request = SimpleNamespace(state=SimpleNamespace(jwt_payload={
+            "sub": "admin-google",
+            "email": "admin@example.com",
+        }))
+        credentials = HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials="google-access-token",
+        )
+
+        with patch("app.core.dependencies.supabase") as mock_sb:
+            mock_sb.auth.get_user.side_effect = Exception("Invalid JWT")
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.limit.return_value = chain
+            chain.execute.return_value = SimpleNamespace(data=[])
+
+            user = get_current_user(request, credentials)
+
+        assert user.id == "admin-google"
+        assert user.email == "admin@example.com"
+
+    def test_unverified_token_is_still_rejected_when_get_user_fails(self):
+        from fastapi.security import HTTPAuthorizationCredentials
+        from fastapi import HTTPException
+        from app.core.dependencies import get_current_user
+
+        request = SimpleNamespace(state=SimpleNamespace())
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="forged-token")
+
+        with patch("app.core.dependencies.supabase") as mock_sb:
+            mock_sb.auth.get_user.side_effect = Exception("Invalid JWT")
+            with pytest.raises(HTTPException) as exc:
+                get_current_user(request, credentials)
+
+        assert exc.value.status_code == 401
+        assert "invalid or expired token" in exc.value.detail.lower()
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Schemas: UserSummary shape and ChatMessageResponse.sender
 # ────────────────────────────────────────────────────────────────────────────

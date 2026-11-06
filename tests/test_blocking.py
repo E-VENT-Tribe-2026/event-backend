@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.dependencies import get_current_onboarded_user, get_current_user, get_optional_user
+from app.core.dependencies import get_current_onboarded_user, get_current_user, get_optional_user, require_regular_user
 from app.main import app
 from tests._fake_supabase import FakeSupabase
 
@@ -80,6 +80,7 @@ def db():
 
     fake.rpc_results["accept_friend_request"] = accept_friend_request
     patches = [patch(f"app.services.{m}.supabase", fake) for m in SERVICE_MODULES]
+    patches.append(patch("app.core.dependencies.supabase", fake))
     patches += [patch("app.services.event_service.generate_embedding", return_value=[0.1, 0.2]),
                 patch("app.services.recommendation_service.generate_embedding", return_value=[0.1, 0.2])]
     for p in patches:
@@ -88,12 +89,13 @@ def db():
     app.dependency_overrides[get_current_user] = who
     app.dependency_overrides[get_current_onboarded_user] = who
     app.dependency_overrides[get_optional_user] = lambda: who() if current["id"] else None
+    app.dependency_overrides[require_regular_user] = who
     try:
         yield fake
     finally:
         for p in patches:
             p.stop()
-        for dep in (get_current_user, get_current_onboarded_user, get_optional_user):
+        for dep in (get_current_user, get_current_onboarded_user, get_optional_user, require_regular_user):
             app.dependency_overrides.pop(dep, None)
         current["id"] = None
 
@@ -366,6 +368,47 @@ class TestEventHiding:
         assert E_A in ids(search_events({"upcoming": False}, D)["events"])
         assert get_event_details({"event_id": E_A}, B)["error"]["code"] == "NOT_FOUND"
         assert get_event_details({"event_id": E_AJ}, B)["success"] is True
+
+    def test_assistant_search_events_endpoint_respects_blocking(self, blocked):
+        # User B is blocked by User A: A's event E_A must be hidden, E_AJ kept via joined exception
+        as_user(B)
+        res = client.post(
+            "/api/assistant/tools/search-events",
+            json={"upcoming": False, "limit": 50},
+            headers=HEADERS,
+        )
+        assert res.status_code == 200
+        events_b = res.json()["events"]
+        assert E_A not in ids(events_b)
+        assert E_AJ in ids(events_b)
+        assert E_B in ids(events_b)
+        assert E_C in ids(events_b)
+
+        # User A blocked User B: B's event E_B must be hidden, E_BJ kept via joined exception
+        as_user(A)
+        res_a = client.post(
+            "/api/assistant/tools/search-events",
+            json={"upcoming": False, "limit": 50},
+            headers=HEADERS,
+        )
+        assert res_a.status_code == 200
+        events_a = res_a.json()["events"]
+        assert E_B not in ids(events_a)
+        assert E_BJ in ids(events_a)
+        assert E_A in ids(events_a)
+        assert E_C in ids(events_a)
+
+        # Unrelated user D sees all events
+        as_user(D)
+        res_d = client.post(
+            "/api/assistant/tools/search-events",
+            json={"upcoming": False, "limit": 50},
+            headers=HEADERS,
+        )
+        assert res_d.status_code == 200
+        events_d = res_d.json()["events"]
+        assert E_A in ids(events_d)
+        assert E_B in ids(events_d)
 
     def test_recommendations(self, blocked):
         as_user(B)

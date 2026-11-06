@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.post("/chat", response_model=AssistantChatResponse, response_model_exclude_none=True)
 def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
-    return generate_reply(body.messages, getattr(user, "id", None), body.draft)
+    return generate_reply(body.messages, getattr(user, "id", None), body.draft, user=user)
 
 
 @router.post("/tools/search-events", response_model=SearchEventsResponse)

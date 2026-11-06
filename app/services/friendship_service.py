@@ -64,6 +64,14 @@ def _is_unique_violation(exc: Exception) -> bool:
 def _is_already_friends_db_error(exc: Exception) -> bool:
     return "already_friends" in _error_blob(exc)
 
+def _is_blocked_db_error(exc: Exception) -> bool:
+    return "users_blocked" in _error_blob(exc)
+
+def _raise_for_block(sender_id: str, receiver_id: str) -> None:
+    """Same answers as the checks before the insert: the blocked sender sees 'not found'."""
+    if has_blocked(sender_id, receiver_id):
+        raise friend_error(403, "user_blocked", "You blocked this user. Unblock them to send a friend request.")
+    raise friend_error(404, "user_not_found", "User not found.")
 
 def _uuid(value) -> str:
     """Return the canonical form of a uuid, raising ValueError for anything else."""
@@ -189,6 +197,10 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
             .execute()
         )
     except Exception as e:
+        # A block committed after the checks above: the insert trigger re-checks under
+        # the per-pair lock and refuses the request (#227).
+        if _is_blocked_db_error(e):
+            _raise_for_block(sender_id, receiver_id)
         # The insert trigger raises 23505 / already_friends when the pair is already
         # friends. PostgREST may omit SQLSTATE 23505, so also match the RAISE message.
         if _is_already_friends_db_error(e):
@@ -232,6 +244,7 @@ def send_friend_request(sender_id: str, receiver_id: str) -> dict:
         "created_at": row["created_at"],
         "user": get_user_summaries([receiver_id])[receiver_id],
     }
+
 
 
 def _claim_request(request_id: int, role_column: str, user_id: str) -> dict:
@@ -545,7 +558,11 @@ def get_user_friends_summary_page(
     limit: int = DEFAULT_PAGE_LIMIT,
     viewer_id: str | None = None,
 ) -> dict:
-    """Return a paginated list of UserSummary objects representing user_id's friends."""
+    """Return a paginated list of UserSummary objects representing user_id's friends.
+
+    Blocked users are removed before the page is cut, so each page is filled with
+    visible friends and has_more is whether more visible friends exist after it.
+    """
     start = (page - 1) * limit
     try:
         uid = _uuid(user_id)
@@ -558,18 +575,19 @@ def get_user_friends_summary_page(
         .or_(f"user_id.eq.{uid},friend_id.eq.{uid}")
         .order("created_at", desc=True)
         .order("id", desc=True)
-        .range(start, start + limit)
         .execute()
     )
-    rows, has_more = _page(resp.data or [], limit)
-
-    others = [r["friend_id"] if _norm(r["user_id"]) == _norm(uid) else r["user_id"] for r in rows]
+    others = [
+        r["friend_id"] if _norm(r["user_id"]) == _norm(uid) else r["user_id"]
+        for r in (resp.data or [])
+    ]
     if viewer_id:
-        hidden = set(get_hidden_user_ids(viewer_id))
-        others = [o for o in others if o not in hidden]
+        hidden = {_norm(h) for h in get_hidden_user_ids(viewer_id)}
+        others = [o for o in others if _norm(o) not in hidden]
 
-    summaries = get_user_summaries(others) if others else {}
-    data = [summaries.get(other) or build_user_summary(None, other) for other in others]
+    window, has_more = _page(others[start:start + limit + 1], limit)
+    summaries = get_user_summaries(window) if window else {}
+    data = [summaries.get(other) or build_user_summary(None, other) for other in window]
     return {"page": page, "limit": limit, "has_more": has_more, "data": data}
 
 

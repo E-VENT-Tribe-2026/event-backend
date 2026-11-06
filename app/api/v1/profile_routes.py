@@ -150,6 +150,7 @@ def read_user_friends(
 ):
     """Get another user's friends list in pages.
     Allowed for everyone on a public profile, and for friends (and self) only on a friends-only profile.
+    Blocked users are omitted before the page is cut; has_more is whether more visible friends remain.
     """
     target_id = str(user_id)
     viewer_id = user.id

@@ -164,6 +164,7 @@ class TestPublicProfileContextualView:
         assert result["interests"] == ["hiking", "gaming"]
         assert result["banner_url"] == "https://example.com/banner.jpg"
         assert len(result["friends"]) == 1
+        assert result["friends_has_more"] is False
         assert len(result["events"]["organized"]["upcoming"]) == 1
         assert len(result["events"]["organized"]["past"]) == 1
         assert len(result["events"]["joined"]["upcoming"]) == 1
@@ -193,6 +194,7 @@ class TestPublicProfileContextualView:
         assert result["bio"] == "Adventurer and coder"
         assert result["interests"] == ["hiking", "gaming"]
         assert len(result["friends"]) == 1
+        assert result["friends_has_more"] is False
         assert result["events"]["organized"]["upcoming"] == []
         assert result["events"]["joined"]["upcoming"] == []
         assert len(result["events"]["organized"]["past"]) == 1
@@ -221,6 +223,7 @@ class TestPublicProfileContextualView:
         assert result["bio"] == "Adventurer and coder"
         assert result["interests"] == ["hiking", "gaming"]
         assert len(result["friends"]) == 1
+        assert result["friends_has_more"] is False
         assert len(result["events"]["organized"]["upcoming"]) == 1
         assert len(result["events"]["organized"]["past"]) == 1
 
@@ -252,8 +255,28 @@ class TestPublicProfileContextualView:
         assert "interests" not in result
         assert "events" not in result
         assert "friends" not in result
+        assert "friends_has_more" not in result
         mock_events.assert_not_called()
         mock_friends.assert_not_called()
+
+    @patch("app.services.public_profile_service.get_public_profile")
+    @patch("app.services.public_profile_service.get_profile_events")
+    @patch("app.services.public_profile_service.get_friendship_state")
+    @patch("app.services.public_profile_service.get_user_friends_summary_page")
+    def test_profile_forwards_friends_has_more(
+        self, mock_friends, mock_state, mock_events, mock_profile,
+        target_profile_public, sample_events, sample_friends_page
+    ):
+        mock_profile.return_value = dict(target_profile_public)
+        mock_events.return_value = dict(sample_events)
+        mock_state.return_value = {"status": "none", "request_id": None}
+        mock_friends.return_value = {**sample_friends_page, "has_more": True}
+
+        from app.services.public_profile_service import build_public_profile
+        result = build_public_profile(TARGET_USER_ID, NON_FRIEND_USER_ID)
+
+        assert result["friends_has_more"] is True
+        assert len(result["friends"]) == 1
 
 
 class TestAnotherUserFriendsEndpoint:

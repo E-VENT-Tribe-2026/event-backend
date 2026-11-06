@@ -313,6 +313,48 @@ class TestLoginUser:
             login_user("a@b.com", "wrong")
         assert exc.value.status_code == 401
 
+
+class TestGoogleLogin:
+    @patch("app.services.auth_service.build_auth_session_response")
+    @patch("supabase.create_client")
+    def test_google_id_token_returns_admin_session(self, mock_create, mock_build):
+        client = MagicMock()
+        mock_create.return_value = client
+        session = MagicMock()
+        user = MagicMock()
+        user.id = "admin-1"
+        client.auth.sign_in_with_id_token.return_value = MagicMock(session=session, user=user)
+        mock_build.return_value = {
+            "access_token": "supa-tok",
+            "is_admin": True,
+            "has_mfa_linked": True,
+            "is_verified": False,
+        }
+
+        from app.services.auth_service import login_with_google_id_token
+        result = login_with_google_id_token("google-id-token", nonce="abc")
+
+        assert result["is_admin"] is True
+        client.auth.sign_in_with_id_token.assert_called_once_with({
+            "provider": "google",
+            "token": "google-id-token",
+            "nonce": "abc",
+        })
+        mock_build.assert_called_once_with("admin-1", session)
+
+    @patch("supabase.create_client")
+    def test_google_id_token_invalid_raises_401(self, mock_create):
+        from gotrue.errors import AuthApiError
+        client = MagicMock()
+        mock_create.return_value = client
+        client.auth.sign_in_with_id_token.side_effect = AuthApiError("Invalid id_token", status=401)
+
+        from app.services.auth_service import login_with_google_id_token
+        with pytest.raises(HTTPException) as exc:
+            login_with_google_id_token("bad-token")
+        assert exc.value.status_code == 401
+        assert "invalid or expired token" in exc.value.detail.lower()
+
 # ──────────────────────────────────────────────
 # change_password
 # ──────────────────────────────────────────────

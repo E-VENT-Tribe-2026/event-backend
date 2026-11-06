@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.dependencies import require_admin
 from app.services.registration_invite_service import (
+    _auth_email_in_use,
     format_invite_code,
     hash_invite_code,
     normalize_invite_code,
@@ -85,11 +86,35 @@ class TestRequireRegistrationInvite:
             assert exc.status_code == 400
 
 
+class TestAuthEmailInUse:
+    def _users(self, emails):
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"users": [{"email": e} for e in emails]}
+        return response
+
+    @patch("app.services.registration_invite_service.settings")
+    @patch("httpx.get")
+    def test_true_when_email_already_registered(self, mock_get, mock_settings):
+        mock_settings.SUPABASE_URL = "https://example.supabase.co"
+        mock_settings.SUPABASE_SERVICE_KEY = "service-key"
+        mock_get.return_value = self._users(["Existing.User@test.com"])
+        assert _auth_email_in_use("existing.user@test.com") is True
+
+    @patch("app.services.registration_invite_service.settings")
+    @patch("httpx.get")
+    def test_false_when_only_a_similar_email_exists(self, mock_get, mock_settings):
+        mock_settings.SUPABASE_URL = "https://example.supabase.co"
+        mock_settings.SUPABASE_SERVICE_KEY = "service-key"
+        mock_get.return_value = self._users(["otheruser@test.com"])
+        assert _auth_email_in_use("user@test.com") is False
+
+
 class TestSendRegistrationInvite:
+    @patch("app.services.registration_invite_service._auth_email_in_use", return_value=False)
     @patch("app.services.audit_service.record_audit")
     @patch("app.services.email_service.send_email")
     @patch("app.services.registration_invite_service.supabase")
-    def test_creates_invite_and_emails_code(self, mock_sb, mock_send, _audit):
+    def test_creates_invite_and_emails_code(self, mock_sb, mock_send, _audit, _taken):
         chain = MagicMock()
         mock_sb.table.return_value = chain
         chain.select.return_value = chain
@@ -113,6 +138,21 @@ class TestSendRegistrationInvite:
         assert insert_payload["email"] == "new.user@test.com"
         assert insert_payload["code_hash"] == hash_invite_code(result["code"])
         assert insert_payload["invited_by"] == "admin-1"
+
+    @patch("app.services.audit_service.record_audit")
+    @patch("app.services.email_service.send_email")
+    @patch("app.services.registration_invite_service.supabase")
+    @patch("app.services.registration_invite_service._auth_email_in_use", return_value=True)
+    def test_refuses_email_that_already_belongs_to_a_user(self, _taken, mock_sb, mock_send, mock_audit):
+        try:
+            send_registration_invite("admin-1", "Existing.User@test.com")
+            assert False, "expected HTTPException"
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            assert "already belongs to an existing user" in exc.detail.lower()
+        mock_sb.table.assert_not_called()
+        mock_send.assert_not_called()
+        mock_audit.assert_not_called()
 
 
 class TestInviteRoutes:
@@ -160,6 +200,22 @@ class TestInviteRoutes:
             assert res.json()["code"] == "ABCD-2345"
             assert mock_send.call_count == 2
             assert mock_send.call_args_list[0].kwargs["email"] == "invitee@test.com"
+        finally:
+            app.dependency_overrides.pop(require_admin, None)
+
+    def test_invite_user_refuses_existing_email(self):
+        app.dependency_overrides[require_admin] = lambda: SimpleNamespace(id="admin-1")
+        try:
+            with patch(
+                "app.api.v1.admin_routes.send_registration_invite",
+                side_effect=HTTPException(
+                    status_code=409,
+                    detail="This email already belongs to an existing user.",
+                ),
+            ):
+                res = client.post("/api/admin/invite_user/existing@test.com")
+            assert res.status_code == 409
+            assert "already belongs to an existing user" in res.json()["detail"].lower()
         finally:
             app.dependency_overrides.pop(require_admin, None)
 

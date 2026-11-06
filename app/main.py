@@ -32,7 +32,6 @@ ENV = os.getenv("ENV", "development")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.services.reminder_service import send_event_reminders
     from app.core.config import settings
 
     logger.debug(f"SMTP config loaded — password_set: {bool(settings.SMTP_PASSWORD)}")
@@ -40,7 +39,7 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
     # Poll every hour; reminder window is 12-13 h before start so each event is caught once
     scheduler.add_job(send_event_reminders, "interval", hours=1, id="event_reminders")
-        # #207: remove invitations (and their notifications) once their event has started
+    # #207: remove invitations (and their notifications) once their event has started
     scheduler.add_job(run_invitation_purge, "interval", minutes=5, id="invitation_purge")
     scheduler.start()
     logger.info("Reminder scheduler started.")

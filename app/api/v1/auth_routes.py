@@ -8,6 +8,9 @@ from app.schemas.auth_schema import (
     RegisterRequest,
     VerifyInviteRequest,
     LoginRequest,
+    GoogleLoginRequest,
+    LoginResponse,
+    MeResponse,
     ChangePasswordRequest,
     ChooseUsernameRequest,
     MFAVerifyRequest,
@@ -18,6 +21,8 @@ from app.schemas.auth_schema import (
 from app.services.auth_service import (
     register_user,
     login_user,
+    login_with_google_id_token,
+    build_auth_session_response,
     request_password_reset,
     verify_reset_token,
     change_password,
@@ -92,9 +97,45 @@ def login(request: Request, data: LoginRequest):
     )
 
 
-@router.get("/me")
+@router.post("/google", response_model=LoginResponse)
+@limiter.limit("10/minute")
+def google_login(request: Request, data: GoogleLoginRequest):
+    """
+    Complete Google sign-in with the Google ID token from the client.
+    Returns the same payload as email/password login, including administrator MFA flags.
+    """
+    return login_with_google_id_token(
+        id_token=data.id_token,
+        nonce=data.nonce,
+        access_token=data.access_token,
+    )
+
+
+@router.get("/session", response_model=LoginResponse)
 @limiter.limit("60/minute")
-def get_profile(request: Request, user=Depends(get_current_user)):
+def read_session(
+    request: Request,
+    credentials=Depends(security),
+    user=Depends(get_current_user),
+):
+    """
+    Turn an existing Supabase session (email or Google) into the login payload.
+    After Google OAuth the client should call this (or GET /me) before user routes
+    so administrator accounts are sent through MFA instead of the user app.
+    """
+    return build_auth_session_response(
+        user.id,
+        {"access_token": credentials.credentials},
+    )
+
+
+@router.get("/me", response_model=MeResponse)
+@limiter.limit("60/minute")
+def get_profile(
+    request: Request,
+    credentials=Depends(security),
+    user=Depends(get_current_user),
+):
     username = None
     role = None
     if supabase:
@@ -105,11 +146,28 @@ def get_profile(request: Request, user=Depends(get_current_user)):
                 role = profile.data.get("role")
         except Exception as e:
             logger.warning(f"Error fetching profile for user {user.id} in /api/auth/me: {e}")
+
+    flags = {
+        "role": role,
+        "is_admin": str(role or "").lower() in ("administrator", "admin"),
+        "has_mfa_linked": False,
+        "is_verified": str(role or "").lower() not in ("administrator", "admin"),
+        "factor_id": None,
+    }
+    try:
+        flags = get_mfa_status(user.id, credentials.credentials)
+    except Exception as e:
+        logger.warning(f"Error fetching MFA status for user {user.id} in /api/auth/me: {e}")
+
     return {
         "id": user.id,
         "email": user.email,
         "username": username,
-        "role": role,
+        "role": flags.get("role") if flags.get("role") is not None else role,
+        "is_admin": flags["is_admin"],
+        "has_mfa_linked": flags["has_mfa_linked"],
+        "is_verified": flags["is_verified"],
+        "factor_id": flags.get("factor_id"),
     }
 
 

@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
+from app.services.admin_report_history_service import report_history, reports_closed
 from app.utils.query_safety import like_contains
 
 logger = logging.getLogger(__name__)
@@ -490,6 +491,7 @@ def get_admin_user_details(user_id: str) -> dict:
         "suspension_reason": None if is_admin else profile.get("suspension_reason"),
         "warning_count": warning_count,
         **({"friends": [], "blocked_users": [], "blocked_by": []} if is_admin else _relations_of(user_id)),
+        "report_history": None if is_admin else report_history(user_id),
     }
 
 
@@ -531,6 +533,7 @@ def get_admin_account_details(admin_id: str) -> dict:
         "icon_id": p.get("icon_id"),
         "admin_since": _as_text(p.get("admin_since")),
         "role": p.get("role") or "administrator",
+        "reports_closed": reports_closed(admin_id),
     }
 
 
@@ -741,89 +744,94 @@ def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_t
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
 
-    # a. Cancel upcoming events organized by this user
+    # a. Cancel upcoming events organized by this user. Required DB writes are not
+    # swallowed: a failed cancel must be retried. Notify/email stay best-effort.
     cancelled_events_count = 0
-    try:
-        org_events_res = (
-            supabase.table("events")
-            .select("id, title, start_datetime, status, removed_at")
-            .eq("created_by", user_id)
-            .neq("status", "cancelled")
-            .execute()
-        )
-        for ev in (org_events_res.data or []):
-            if ev.get("removed_at"):
-                continue  # an event an administrator removed (#236) is not cancelled on top of that
-            start_dt = _parse_iso_datetime(ev.get("start_datetime"))
-            if start_dt and start_dt >= now_dt:
-                ev_id = ev["id"]
-                supabase.table("events").update({
-                    "status": "cancelled",
-                    "cancellation_reason": cancellation_reason,
-                    "updated_at": now_iso
-                }).eq("id", ev_id).execute()
+    org_events_res = (
+        supabase.table("events")
+        .select("id, title, start_datetime, status, removed_at")
+        .eq("created_by", user_id)
+        .neq("status", "cancelled")
+        .execute()
+    )
+    for ev in (org_events_res.data or []):
+        if ev.get("removed_at"):
+            continue  # an event an administrator removed (#236) is not cancelled on top of that
+        start_dt = _parse_iso_datetime(ev.get("start_datetime"))
+        if start_dt and start_dt >= now_dt:
+            ev_id = ev["id"]
+            supabase.table("events").update({
+                "status": "cancelled",
+                "cancellation_reason": cancellation_reason,
+                "updated_at": now_iso
+            }).eq("id", ev_id).execute()
 
-                cancelled_events_count += 1
+            cancelled_events_count += 1
 
-                # Send notifications to participants
-                try:
-                    from app.services.notification_service import create_notification
-                    part_res = (
-                        supabase.table("event_participants")
-                        .select("user_id")
-                        .eq("event_id", ev_id)
-                        .execute()
-                    )
-                    for p in (part_res.data or []):
-                        if p.get("user_id") and p["user_id"] != user_id:
-                            create_notification(
-                                p["user_id"],
-                                ev_id,
-                                "event_cancelled",
-                                notification_text.format(title=ev.get("title"))
-                            )
-                except Exception as n_err:
-                    logger.warning(f"Failed to notify participants for cancelled event {ev_id}: {n_err}")
-
-                try:
-                    from app.services.event_service import _email_participants
-                    _email_participants(ev, "cancellation")
-                except Exception as em_err:
-                    logger.warning(f"Failed to email participants for cancelled event {ev_id}: {em_err}")
-    except Exception as e:
-        logger.error(f"Error cancelling organized events for user {user_id}: {e}")
-
-    # b. Take them off upcoming events they joined
-    joined_events_removed_count = 0
-    try:
-        joined_res = (
-            supabase.table("event_participants")
-            .select("id, event_id")
-            .eq("user_id", user_id)
-            .execute()
-        )
-        joined_rows = joined_res.data or []
-        if joined_rows:
-            ev_ids = [r["event_id"] for r in joined_rows if r.get("event_id")]
-            if ev_ids:
-                events_info = (
-                    supabase.table("events")
-                    .select("id, start_datetime")
-                    .in_("id", ev_ids)
+            try:
+                from app.services.notification_service import create_notification
+                part_res = (
+                    supabase.table("event_participants")
+                    .select("user_id")
+                    .eq("event_id", ev_id)
                     .execute()
-                ).data or []
-                upcoming_event_ids = {
-                    e["id"] for e in events_info
-                    if _parse_iso_datetime(e.get("start_datetime")) and _parse_iso_datetime(e.get("start_datetime")) >= now_dt
-                }
-                for r in joined_rows:
-                    if r.get("event_id") in upcoming_event_ids:
-                        supabase.table("event_participants").delete().eq("id", r["id"]).execute()
-                        joined_events_removed_count += 1
-    except Exception as e:
-        logger.error(f"Error removing joined events for user {user_id}: {e}")
+                )
+                for p in (part_res.data or []):
+                    if p.get("user_id") and p["user_id"] != user_id:
+                        create_notification(
+                            p["user_id"],
+                            ev_id,
+                            "event_cancelled",
+                            notification_text.format(title=ev.get("title"))
+                        )
+            except Exception as n_err:
+                logger.warning(f"Failed to notify participants for cancelled event {ev_id}: {n_err}")
+
+            try:
+                from app.services.event_service import _email_participants
+                _email_participants(ev, "cancellation")
+            except Exception as em_err:
+                logger.warning(f"Failed to email participants for cancelled event {ev_id}: {em_err}")
+
+    # b. Take them off upcoming events they joined.
+    joined_events_removed_count = 0
+    joined_res = (
+        supabase.table("event_participants")
+        .select("id, event_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    joined_rows = joined_res.data or []
+    if joined_rows:
+        ev_ids = [r["event_id"] for r in joined_rows if r.get("event_id")]
+        if ev_ids:
+            events_info = (
+                supabase.table("events")
+                .select("id, start_datetime")
+                .in_("id", ev_ids)
+                .execute()
+            ).data or []
+            upcoming_event_ids = {
+                e["id"] for e in events_info
+                if _parse_iso_datetime(e.get("start_datetime")) and _parse_iso_datetime(e.get("start_datetime")) >= now_dt
+            }
+            for r in joined_rows:
+                if r.get("event_id") in upcoming_event_ids:
+                    supabase.table("event_participants").delete().eq("id", r["id"]).execute()
+                    joined_events_removed_count += 1
 
     return cancelled_events_count, joined_events_removed_count
+
+def revoke_user_sessions(user_id: str) -> int:
+    """
+    End every session of a user (#228): their refresh tokens stop working, and their
+    access tokens are refused by supabase.auth.get_user() because the session is gone.
+    Uses the revoke_user_sessions SQL function (Supabase Auth has no admin route to sign
+    out another user). Raises if the function fails or is missing.
+    """
+    resp = supabase.rpc("revoke_user_sessions", {"p_user_id": str(user_id)}).execute()
+    data = getattr(resp, "data", None)
+    return data if isinstance(data, int) else 0
 
 def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     """
@@ -879,6 +887,17 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not re-assert service key on postgrest client: {e}")
 
+        # End their sessions before changing anything: if that is not possible, refuse
+    # and leave the account untouched, so the request can simply be retried (#228).
+    try:
+        revoke_user_sessions(actual_target_id)
+    except Exception as e:
+        logger.error(f"Could not revoke sessions for user {actual_target_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not end the user's sessions. The account was not changed.",
+        )
+    
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
 
@@ -953,19 +972,13 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         logger.error(f"Failed to update profile to administrator for {actual_target_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant administrator role.")
 
-    # 11. End their sessions at once
+    # 11. End their sessions again: catches a sign-in made while the steps above ran (#228)
+    sessions_revoked = True
     try:
-        from app.core.config import settings
-        import requests
-        if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
-            logout_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{actual_target_id}/logout"
-            headers = {
-                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
-                "apikey": settings.SUPABASE_SERVICE_KEY,
-            }
-            requests.post(logout_url, headers=headers, timeout=5)
+        revoke_user_sessions(actual_target_id)
     except Exception as e:
-        logger.warning(f"Could not revoke sessions for user {actual_target_id}: {e}")
+        sessions_revoked = False
+        logger.error(f"Could not revoke sessions after promotion for user {actual_target_id}: {e}")
 
     # 12. Record in audit log
     summary_dict = {
@@ -977,6 +990,7 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         "saved_events_deleted": True,
         "notifications_deleted": True,
         "profile_purged": True,
+        "sessions_revoked": sessions_revoked,
     }
     try:
         audit_entry = {
@@ -991,6 +1005,13 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Could not write audit log for user {actual_target_id}: {e}")
 
+    # Never report success while old sessions may still work (#228).
+    if not sessions_revoked:
+        raise HTTPException(
+            status_code=500,
+            detail="The account was made an administrator, but its sessions could not be ended.",
+        )
+    
     return {
         "message": "User made administrator successfully.",
         "user_id": actual_target_id,

@@ -129,6 +129,59 @@ def register_user(
     
 from gotrue.errors import AuthApiError
 
+
+def _session_access_token(session) -> str | None:
+    if isinstance(session, dict):
+        token = session.get("access_token")
+        return token if isinstance(token, str) and token else None
+    token = getattr(session, "access_token", None)
+    return token if isinstance(token, str) and token else None
+
+
+def build_auth_session_response(user_id: str, session) -> dict:
+    """Same login payload for password, Google, and an existing Supabase session."""
+    access_token = _session_access_token(session)
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Login failed. Please check your credentials."
+        )
+
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("role, suspended_at, suspension_reason")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        profile_data = profile_res.data if isinstance(profile_res.data, dict) else {}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Could not fetch profile role for user {user_id}: {e}")
+        from app.core.dependencies import suspension_lookup_unavailable
+        raise suspension_lookup_unavailable()
+
+    if profile_data.get("suspended_at"):
+        from app.core.dependencies import suspension_error
+        raise suspension_error(profile_data.get("suspension_reason"))
+
+    flags = get_mfa_status(user_id, access_token)
+    result = {
+        "access_token": access_token,
+        "refresh_token": _session_refresh_token(session),
+        "token_type": "bearer",
+        "role": flags.get("role") if flags.get("is_admin") else profile_data.get("role"),
+        "is_admin": flags["is_admin"],
+        "has_mfa_linked": flags["has_mfa_linked"],
+        "is_verified": flags["is_verified"],
+    }
+    if flags.get("factor_id"):
+        result["factor_id"] = flags["factor_id"]
+    return result
+
+
 def login_user(email: str, password: str):
     try:
         response = supabase.auth.sign_in_with_password({
@@ -143,70 +196,10 @@ def login_user(email: str, password: str):
                 detail="Login failed. Please check your credentials."
             )
 
-        user_id = response.user.id
-        role = None
-        profile_data = {}
-        try:
-            profile_res = (
-                supabase.table("profiles")
-                .select("role, suspended_at, suspension_reason")
-                .eq("id", user_id)
-                .single()
-                .execute()
-            )
-            profile_data = profile_res.data if isinstance(profile_res.data, dict) else {}
-            role = profile_data.get("role")
-        except Exception as e:
-            logger.warning(f"Could not fetch profile role for user {user_id}: {e}")
+        return build_auth_session_response(response.user.id, response.session)
 
-        # Suspended account (#192): the credentials were correct, so we may say why.
-        # Wrong credentials never reach this point and get the generic 401 below.
-        if profile_data.get("suspended_at"):
-            from app.core.dependencies import suspension_error
-            raise suspension_error(profile_data.get("suspension_reason"))
-
-        is_admin = (str(role or "").lower() in ("administrator", "admin"))
-        if not is_admin:
-            return {
-                "access_token": response.session.access_token,
-                "refresh_token": _session_refresh_token(response.session),
-                "token_type": "bearer",
-                "role": role,
-                "is_admin": False,
-                "has_mfa_linked": False,
-                "is_verified": True,
-            }
-
-        # Administrator account: check if TOTP factor is linked
-        has_mfa_linked = False
-        factor_id = None
-        try:
-            factors = get_user_factors(user_id)
-            for f in factors:
-                f_type = f.get("factor_type") if isinstance(f, dict) else getattr(f, "factor_type", None)
-                f_status = f.get("status") if isinstance(f, dict) else getattr(f, "status", None)
-                f_id = f.get("id") if isinstance(f, dict) else getattr(f, "id", None)
-                if f_type == "totp" and f_status == "verified":
-                    has_mfa_linked = True
-                    factor_id = f_id
-                    break
-        except Exception as e:
-            logger.error(f"Error checking MFA factors for admin {user_id}: {e}")
-
-        result = {
-            "access_token": response.session.access_token,
-            "refresh_token": _session_refresh_token(response.session),
-            "token_type": "bearer",
-            "role": "administrator",
-            "is_admin": True,
-            "has_mfa_linked": has_mfa_linked,
-            "is_verified": False,
-        }
-        if factor_id:
-            result["factor_id"] = factor_id
-
-        return result
-
+    except HTTPException:
+        raise
     except AuthApiError as e:
         error = str(e).lower()
 
@@ -233,6 +226,53 @@ def login_user(email: str, password: str):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Login failed. Please check your credentials."
         )
+
+
+def login_with_google_id_token(
+    id_token: str,
+    nonce: str | None = None,
+    access_token: str | None = None,
+):
+    """Exchange a Google ID token for the same session payload as email/password login."""
+    from supabase import create_client
+
+    credentials = {"provider": "google", "token": id_token}
+    if nonce:
+        credentials["nonce"] = nonce
+    if access_token:
+        credentials["access_token"] = access_token
+
+    try:
+        client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_KEY,
+        )
+        client._listen_to_auth_events = lambda event, session: None
+        if hasattr(client.auth, "_state_change_emitters"):
+            client.auth._state_change_emitters.clear()
+
+        response = client.auth.sign_in_with_id_token(credentials)
+    except AuthApiError as e:
+        logger.warning(f"login_with_google_id_token AuthApiError: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    except Exception as e:
+        logger.error(f"login_with_google_id_token unexpected error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+    if not getattr(response, "session", None) or not getattr(response, "user", None):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+    return build_auth_session_response(response.user.id, response.session)
+
 
 def request_password_reset(email: str):
     """
@@ -448,6 +488,9 @@ def get_user_factors(user_id: str) -> list:
 
 
 def _session_refresh_token(session) -> str | None:
+    if isinstance(session, dict):
+        token = session.get("refresh_token")
+        return token if isinstance(token, str) and token else None
     token = getattr(session, "refresh_token", None)
     return token if isinstance(token, str) and token else None
 

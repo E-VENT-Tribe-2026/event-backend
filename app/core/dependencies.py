@@ -1,7 +1,9 @@
 import base64
 import json
 import logging
-from fastapi import Depends, HTTPException, status
+from types import SimpleNamespace
+
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.db.supabase_client import supabase
 
@@ -22,8 +24,22 @@ def suspension_error(reason: str | None) -> HTTPException:
     )
 
 
+def suspension_lookup_unavailable() -> HTTPException:
+    """503 when we cannot tell whether the account is allowed to use the application."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "suspension_check_unavailable",
+            "message": "Could not verify whether this account is allowed to use the application.",
+        },
+    )
+
+
 def refuse_if_suspended(user_id: str) -> None:
-    """Raise suspension_error when the account is suspended (#192)."""
+    """Raise suspension_error when the account is suspended (#192).
+
+    A failed lookup must not grant access: refuse with 503 until the check can be completed.
+    """
     try:
         res = (
             supabase.table("profiles")
@@ -33,46 +49,74 @@ def refuse_if_suspended(user_id: str) -> None:
             .execute()
         )
         data = res.data
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Could not check suspension of user {user_id}: {e}")
-        return
+        raise suspension_lookup_unavailable()
     if isinstance(data, list):
         data = data[0] if data else {}
     if isinstance(data, dict) and data.get("suspended_at"):
         raise suspension_error(data.get("suspension_reason"))
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def _user_from_verified_payload(payload: dict | None):
+    """Build a user from a JWT that middleware already signature-checked."""
+    if not isinstance(payload, dict):
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    email = payload.get("email")
+    metadata = payload.get("user_metadata")
+    if not email and isinstance(metadata, dict):
+        email = metadata.get("email")
+    return SimpleNamespace(id=str(user_id), email=email)
+
+
+def _resolve_user(token: str, verified_payload: dict | None):
+    """
+    Prefer GoTrue's user lookup (catches revoked sessions). If that fails after
+    middleware already verified the JWT — common for Google/OAuth sessions,
+    especially administrator accounts with MFA enrolled — use the verified claims.
+    Never trust an unverified token: verified_payload is only set after verify_jwt.
+    """
+    try:
+        result = supabase.auth.get_user(token)
+        if result is not None and getattr(result, "user", None) is not None:
+            return result.user
+    except Exception as e:
+        logger.warning("supabase.auth.get_user failed; using verified JWT if present: %s", e)
+
+    return _user_from_verified_payload(verified_payload)
+
+
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
     """
     The signed-in user. Every authenticated endpoint depends on this (directly or through
     require_regular_user, get_current_onboarded_user or require_admin), so a suspended
     account is refused here on every request, whichever way it signed in (#192).
     """
-    token = credentials.credentials
-
-    try:
-        user = supabase.auth.get_user(token)
-
-        if user.user is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-    except Exception:
+    user = _resolve_user(credentials.credentials, getattr(request.state, "jwt_payload", None))
+    if user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    refuse_if_suspended(user.user.id)
-    return user.user
+    refuse_if_suspended(user.id)
+    return user
 
 
-def get_optional_user(credentials: HTTPAuthorizationCredentials | None = Depends(optional_security)):
+def get_optional_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+):
     """For public endpoints: the signed-in user when a valid token is sent, otherwise None.
     A suspended account's token is refused, not treated as anonymous (#192)."""
     if credentials is None:
         return None
-    try:
-        result = supabase.auth.get_user(credentials.credentials)
-        user = result.user
-    except Exception:
-        return None
+    user = _resolve_user(credentials.credentials, getattr(request.state, "jwt_payload", None))
     if user is not None:
         refuse_if_suspended(user.id)
     return user

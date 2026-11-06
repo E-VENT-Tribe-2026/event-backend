@@ -12,6 +12,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+ORGANIZER_CANCELLATION_REASON = "Cancelled by organizer"
+
 
 def _email_participants(event: dict, email_type: str):
     """
@@ -578,7 +580,11 @@ def cancel_event(user_id: str, event_id: str):
 
     # mark cancelled
     supabase.table("events") \
-        .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}) \
+        .update({
+            "status": "cancelled",
+            "cancellation_reason": ORGANIZER_CANCELLATION_REASON,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }) \
         .eq("id", event_id) \
         .execute()
 
