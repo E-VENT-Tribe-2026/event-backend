@@ -32,6 +32,69 @@ def _provider_response(content="Here is an explanation."):
     )
 
 
+def test_assistant_chat_passes_the_signed_in_user():
+    with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
+        "app.services.assistant_service.run_agent_workflow",
+        return_value={"reply": "Here is an explanation."},
+    ) as run:
+        response = client.post(
+            "/api/assistant/chat",
+            json={"messages": [{"role": "user", "content": "Hello"}]},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"reply": "Here is an explanation."}
+    assert run.call_args.kwargs["user_id"] == "u1"
+
+
+def test_assistant_chat_returns_the_updated_draft():
+    updated = {
+        "title": "Jazz Night",
+        "start_datetime": "2026-11-20T18:00:00Z",
+        "end_datetime": "2026-11-20T21:00:00Z",
+        "location_name": "Prague",
+        "description": None,
+        "category": None,
+        "cost": 0.0,
+        "max_capacity": None,
+        "latitude": None,
+        "longitude": None,
+    }
+    with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
+        "app.services.assistant_service.run_agent_workflow",
+        return_value={
+            "reply": "Updated the location.",
+            "metadata": {
+                "type": "draft_event_preview",
+                "draft": updated,
+                "validation_issues": [{"field": "location_name", "message": "Check the address."}],
+            },
+        },
+    ) as run:
+        response = client.post(
+            "/api/assistant/chat",
+            json={
+                "messages": [{"role": "user", "content": "Move it to Prague"}],
+                "draft": {
+                    "title": "Jazz Night",
+                    "location_name": "Berlin",
+                    "start_datetime": "2026-11-20T18:00:00Z",
+                    "end_datetime": "2026-11-20T21:00:00Z",
+                },
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply"] == "Updated the location."
+    assert body["draft"]["location_name"] == "Prague"
+    assert body["draft"]["title"] == "Jazz Night"
+    assert body["validation_issues"] == ["Check the address."]
+    assert run.call_args.kwargs["draft"]["location_name"] == "Berlin"
+
+
 def test_assistant_chat_requires_authentication():
     app.dependency_overrides.pop(get_current_user, None)
     try:
@@ -89,6 +152,27 @@ def test_assistant_chat_rejects_invalid_history(messages):
     )
 
     assert response.status_code == 422
+
+
+def test_follow_up_accepts_a_long_search_reply():
+    with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
+        "app.services.assistant_service.run_agent_workflow",
+        return_value={"reply": "Here are the music events."},
+    ):
+        response = client.post(
+            "/api/assistant/chat",
+            json={
+                "messages": [
+                    {"role": "user", "content": "Search upcoming events"},
+                    {"role": "assistant", "content": "Event listing. " + ("x" * 4000)},
+                    {"role": "user", "content": "Show me the music ones"},
+                ]
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "Here are the music events."
 
 
 def test_assistant_chat_rejects_oversized_history():

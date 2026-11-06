@@ -63,6 +63,22 @@ def _post(payload):
     )
 
 
+def test_search_tool_filters_for_the_signed_in_user():
+    viewer = "11111111-1111-1111-1111-111111111111"
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=viewer)
+    supabase, _chain = _stub_query([_row()], total=1)
+    try:
+        with patch("app.services.event_search_service.supabase", supabase), patch(
+            "app.services.event_search_service.hidden_events_filter", return_value=None
+        ) as visible:
+            response = _post({"query": "jazz"})
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
+
+    assert response.status_code == 200
+    visible.assert_called_once_with(viewer)
+
+
 def test_search_requires_authentication():
     app.dependency_overrides.pop(get_current_user, None)
     with patch("app.core.dependencies.supabase.auth.get_user", side_effect=Exception("Invalid token")):
