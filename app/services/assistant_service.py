@@ -70,7 +70,6 @@ def call_llm(messages: list[dict[str, str]]) -> str:
         ) from None
 
 
-
 def extract_minimal_user(user: Any = None, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Extract non-sensitive minimal user attributes for personalized assistant interactions."""
     if not user and not user_id:
@@ -102,9 +101,11 @@ def extract_minimal_user(user: Any = None, user_id: Optional[str] = None) -> Opt
 
     return minimal or None
 
+
 def run_agent_workflow(
     messages: list[Any],
     user_id: Optional[str] = None,
+    draft: Optional[dict] = None,
     user: Optional[Any] = None,
 ) -> AgentState:
     """Execute the multi-turn 2-agent LangGraph workflow."""
@@ -113,24 +114,41 @@ def run_agent_workflow(
         m.model_dump() if hasattr(m, "model_dump") else (dict(m) if not isinstance(m, dict) else m)
         for m in messages
     ]
+    from app.agents.tools import merge_draft
+
     user_data = extract_minimal_user(user, user_id=user_id)
     resolved_user_id = user_id or (user_data.get("id") if user_data else None)
+    if isinstance(resolved_user_id, str):
+        resolved_user_id = resolved_user_id.strip() or None
     initial_state: AgentState = {
         "messages": raw_messages,
         "user_id": resolved_user_id,
         "user": user_data,
-        "entity_slots": {},
+        "entity_slots": merge_draft({}, draft),
         "input_guard_passed": False,
         "output_guard_passed": False,
     }
     return graph.invoke(initial_state)
 
 
+def _issue_messages(issues: Any) -> list[str]:
+    messages: list[str] = []
+    if not isinstance(issues, list):
+        return messages
+    for issue in issues:
+        if isinstance(issue, str) and issue.strip():
+            messages.append(issue.strip())
+        elif isinstance(issue, dict) and issue.get("message"):
+            messages.append(str(issue["message"]))
+    return messages
+
+
 def generate_reply(
     messages: list[AssistantMessage],
     user_id: Optional[str] = None,
+    draft: Optional[dict] = None,
     user: Optional[Any] = None,
-) -> str:
+) -> dict[str, Any]:
     """Generate assistant reply using the 2-agent LangGraph pipeline."""
     if not settings.GEMINI_API_KEY:
         raise HTTPException(
@@ -139,5 +157,18 @@ def generate_reply(
         )
 
     raw_messages = [message.model_dump() for message in messages]
-    result_state = run_agent_workflow(raw_messages, user_id=user_id, user=user)
-    return result_state.get("reply", "")
+    viewer_id = str(user_id).strip() if user_id else None
+    result_state = run_agent_workflow(
+        raw_messages,
+        user_id=viewer_id or None,
+        draft=draft,
+        user=user,
+    )
+    payload: dict[str, Any] = {"reply": result_state.get("reply") or ""}
+    metadata = result_state.get("metadata") or {}
+    if metadata.get("type") == "draft_event_preview" and isinstance(metadata.get("draft"), dict):
+        payload["draft"] = metadata["draft"]
+    issues = _issue_messages(metadata.get("validation_issues"))
+    if issues:
+        payload["validation_issues"] = issues
+    return payload

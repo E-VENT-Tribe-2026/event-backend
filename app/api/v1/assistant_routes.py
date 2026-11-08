@@ -16,9 +16,9 @@ from app.services.event_search_service import search_events
 router = APIRouter()
 
 
-@router.post("/chat", response_model=AssistantChatResponse)
+@router.post("/chat", response_model=AssistantChatResponse, response_model_exclude_none=True)
 def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
-    return AssistantChatResponse(reply=generate_reply(body.messages, getattr(user, "id", None), user=user))
+    return generate_reply(body.messages, getattr(user, "id", None), body.draft, user=user)
 
 
 @router.post("/tools/search-events", response_model=SearchEventsResponse)
