@@ -26,12 +26,18 @@ from app.services.auth_service import (
     request_password_reset,
     verify_reset_token,
     change_password,
+    delete_account,
     enroll_mfa,
     verify_mfa,
     get_mfa_status,
 )
 from app.services.auth_service import reset_password as reset_user_password
-from app.core.dependencies import get_current_user, get_current_onboarded_user, security
+from app.core.dependencies import (
+    get_current_user,
+    get_current_onboarded_user,
+    require_regular_user,
+    security,
+)
 from app.core.limiter import limiter
 import httpx
 
@@ -267,3 +273,10 @@ def change_user_password(request: Request, data: ChangePasswordRequest, user=Dep
         current_password=data.current_password,
         new_password=data.new_password
     )
+
+
+@router.delete("/account")
+@limiter.limit("5/minute")
+def delete_own_account(request: Request, user=Depends(require_regular_user)):
+    """Permanently deletes the signed-in user's account. Administrators cannot use this."""
+    return delete_account(user.id)

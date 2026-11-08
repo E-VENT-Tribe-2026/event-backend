@@ -239,6 +239,49 @@ class TestAuthRoutes:
         finally:
             app.dependency_overrides.pop(get_current_user, None)
 
+    @patch("app.api.v1.auth_routes.delete_account")
+    def test_delete_account_route(self, mock_delete):
+        class MockUser:
+            id = "u1"
+            email = "test@test.com"
+
+        from app.core.dependencies import require_regular_user
+        app.dependency_overrides[require_regular_user] = lambda: MockUser()
+        try:
+            mock_delete.return_value = {"message": "Account deleted."}
+            response = client.delete("/api/auth/account", headers={"Authorization": "Bearer token"})
+            assert response.status_code == 200
+            assert response.json() == {"message": "Account deleted."}
+            mock_delete.assert_called_once_with("u1")
+        finally:
+            app.dependency_overrides.pop(require_regular_user, None)
+
+    def test_delete_account_unauthenticated_is_refused(self):
+        response = client.delete("/api/auth/account", follow_redirects=False)
+        assert response.status_code in (401, 403)
+
+    @patch("app.core.dependencies.supabase")
+    def test_delete_account_administrator_is_403(self, mock_sb):
+        class MockAdmin:
+            id = "admin-1"
+            email = "admin@example.com"
+
+        from app.core.dependencies import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: MockAdmin()
+        try:
+            chain = MagicMock()
+            mock_sb.table.return_value = chain
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.single.return_value = chain
+            chain.execute.return_value = MagicMock(data={"role": "administrator"})
+
+            response = client.delete("/api/auth/account", headers={"Authorization": "Bearer token"})
+            assert response.status_code == 403
+            assert "administrator" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
     def test_register_route_refuses_missing_username(self):
         payload = {
             "email": "test@test.com",

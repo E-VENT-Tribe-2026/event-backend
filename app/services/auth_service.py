@@ -744,3 +744,43 @@ def verify_mfa(user_id: str, access_token: str, code: str, factor_id: str | None
     except Exception as e:
         logger.error(f"Unexpected error in verify_mfa: {e}")
         raise HTTPException(status_code=500, detail="Verification failed due to a server error.")
+
+
+def delete_account(user_id: str) -> dict:
+    """Delete this user's account.
+
+    Upcoming events they organize are cancelled and they leave upcoming events they joined,
+    then the Auth user is removed. The profile row (and rows that cascade from it) go with
+    the Auth user. Administrator accounts are refused by the route (require_regular_user).
+    """
+    from supabase import create_client
+    from app.services.admin_service import end_upcoming_activity
+
+    try:
+        end_upcoming_activity(
+            user_id,
+            cancellation_reason="Organizer deleted their account",
+            notification_text="Event '{title}' was cancelled because the organizer deleted their account",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Could not update events before deleting account {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not update this account's events. The account was not deleted.",
+        )
+
+    try:
+        admin_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        admin_client.auth.admin.delete_user(user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Could not delete auth user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not delete the account. Please try again.",
+        )
+
+    return {"message": "Account deleted."}

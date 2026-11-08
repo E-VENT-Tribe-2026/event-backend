@@ -393,3 +393,67 @@ class TestChangePassword:
             "u1",
             {"password": "newpass"}
         )
+
+
+# ──────────────────────────────────────────────
+# delete_account
+# ──────────────────────────────────────────────
+
+class TestDeleteAccount:
+    @patch("supabase.create_client")
+    @patch("app.services.admin_service.end_upcoming_activity")
+    def test_cancels_upcoming_activity_then_deletes_auth_user(self, mock_end, mock_create):
+        from app.services.auth_service import delete_account
+
+        mock_end.return_value = (1, 0)
+        admin_client = MagicMock()
+        mock_create.return_value = admin_client
+
+        result = delete_account("u1")
+
+        assert result == {"message": "Account deleted."}
+        mock_end.assert_called_once_with(
+            "u1",
+            cancellation_reason="Organizer deleted their account",
+            notification_text="Event '{title}' was cancelled because the organizer deleted their account",
+        )
+        admin_client.auth.admin.delete_user.assert_called_once_with("u1")
+
+    @patch("supabase.create_client")
+    @patch("app.services.admin_service.end_upcoming_activity")
+    def test_does_not_delete_auth_user_when_events_fail(self, mock_end, mock_create):
+        from app.services.auth_service import delete_account
+
+        mock_end.side_effect = RuntimeError("events down")
+        with pytest.raises(HTTPException) as exc:
+            delete_account("u1")
+        assert exc.value.status_code == 503
+        assert "was not deleted" in exc.value.detail
+        mock_create.assert_not_called()
+
+    @patch("supabase.create_client")
+    @patch("app.services.admin_service.end_upcoming_activity")
+    def test_passes_through_http_error_from_event_updates(self, mock_end, mock_create):
+        from app.services.auth_service import delete_account
+
+        mock_end.side_effect = HTTPException(status_code=503, detail="suspension_effects_incomplete")
+        with pytest.raises(HTTPException) as exc:
+            delete_account("u1")
+        assert exc.value.status_code == 503
+        mock_create.assert_not_called()
+
+    @patch("supabase.create_client")
+    @patch("app.services.admin_service.end_upcoming_activity")
+    def test_503_when_auth_delete_fails_after_events_were_updated(self, mock_end, mock_create):
+        from app.services.auth_service import delete_account
+
+        mock_end.return_value = (0, 0)
+        admin_client = MagicMock()
+        admin_client.auth.admin.delete_user.side_effect = RuntimeError("auth down")
+        mock_create.return_value = admin_client
+
+        with pytest.raises(HTTPException) as exc:
+            delete_account("u1")
+        assert exc.value.status_code == 503
+        assert "try again" in exc.value.detail.lower()
+        mock_end.assert_called_once()
