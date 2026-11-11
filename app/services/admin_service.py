@@ -908,39 +908,58 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
         notification_text="Event '{title}' was cancelled because organizer was made an administrator",
     )
 
-    # 4. Delete friends in both directions
-    try:
-        supabase.table("friendships").delete().eq("user_id", actual_target_id).execute()
-        supabase.table("friendships").delete().eq("friend_id", actual_target_id).execute()
-    except Exception as e:
-        logger.error(f"Error deleting friendships for user {actual_target_id}: {e}")
+       # 4.-8. Required cleanup (#229). Each step records whether it really worked.
+    # If any step fails, the role is NOT granted: the account stays a regular user,
+    # the audit log records exactly what was and was not done, and the request
+    # can simply be retried (deleting rows that are already gone is harmless).
+    required_cleanup = [
+        ("friendships_deleted", "friendships", ("user_id", "friend_id")),
+        ("friend_requests_deleted", "friend_requests", ("initiator_id", "receiver_id")),
+        ("blocks_deleted", "user_blocks", ("blocker_id", "blocked_id")),
+        ("saved_events_deleted", "saved_events", ("user_id",)),
+        ("notifications_deleted", "notifications", ("user_id", "actor_id")),
+    ]
+    cleanup_results = {}
+    for summary_key, table_name, columns in required_cleanup:
+        try:
+            for column in columns:
+                supabase.table(table_name).delete().eq(column, actual_target_id).execute()
+            cleanup_results[summary_key] = True
+        except Exception as e:
+            cleanup_results[summary_key] = False
+            logger.error(f"Error deleting {table_name} for user {actual_target_id}: {e}")
 
-    # 5. Delete pending friend requests in both directions
-    try:
-        supabase.table("friend_requests").delete().eq("initiator_id", actual_target_id).execute()
-        supabase.table("friend_requests").delete().eq("receiver_id", actual_target_id).execute()
-    except Exception as e:
-        logger.error(f"Error deleting friend requests for user {actual_target_id}: {e}")
-
-    # 6. Delete blocks in both directions
-    try:
-        supabase.table("user_blocks").delete().eq("blocker_id", actual_target_id).execute()
-        supabase.table("user_blocks").delete().eq("blocked_id", actual_target_id).execute()
-    except Exception as e:
-        logger.error(f"Error deleting blocks for user {actual_target_id}: {e}")
-
-    # 7. Delete favourites (saved_events)
-    try:
-        supabase.table("saved_events").delete().eq("user_id", actual_target_id).execute()
-    except Exception as e:
-        logger.error(f"Error deleting saved events for user {actual_target_id}: {e}")
-
-    # 8. Delete notifications
-    try:
-        supabase.table("notifications").delete().eq("user_id", actual_target_id).execute()
-        supabase.table("notifications").delete().eq("actor_id", actual_target_id).execute()
-    except Exception as e:
-        logger.error(f"Error deleting notifications for user {actual_target_id}: {e}")
+    failed_steps = [key for key, ok in cleanup_results.items() if not ok]
+    if failed_steps:
+        failed_summary = {
+            "cancelled_events_count": cancelled_events_count,
+            "joined_events_removed_count": joined_events_removed_count,
+            **cleanup_results,
+            "profile_purged": False,
+            "role_granted": False,
+        }
+        try:
+            supabase.table("logs").insert({
+                "type": "make_admin_failed",
+                "description": (
+                    f"Making user {actual_target_id} an administrator failed: "
+                    f"{', '.join(failed_steps)} did not complete. The role was not granted."
+                ),
+                "created_by_id": admin_user_id,
+                "entity_id": str(actual_target_id),
+                "values": [f"{k}:{v}" for k, v in failed_summary.items()],
+                "created_date": now_iso,
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Could not write failure audit log for user {actual_target_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not finish removing the user's data "
+                f"({', '.join(failed_steps)} failed). The administrator role was not granted. "
+                "Please try again."
+            ),
+        )
 
     # 9. Defensively delete warnings
     try:
@@ -984,11 +1003,7 @@ def grant_admin_role(target_user_id: str, admin_user_id: str) -> dict:
     summary_dict = {
         "cancelled_events_count": cancelled_events_count,
         "joined_events_removed_count": joined_events_removed_count,
-        "friendships_deleted": True,
-        "friend_requests_deleted": True,
-        "blocks_deleted": True,
-        "saved_events_deleted": True,
-        "notifications_deleted": True,
+        **cleanup_results,
         "profile_purged": True,
         "sessions_revoked": sessions_revoked,
     }
