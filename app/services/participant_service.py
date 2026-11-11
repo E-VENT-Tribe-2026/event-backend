@@ -193,7 +193,7 @@ def _norm(value) -> str:
     return str(value).strip().lower()
 
 
-_PARTICIPANT_SELECT = "user_id, status, profiles(username, full_name, avatar_url, avatar_kind, icon_id)"
+_PARTICIPANT_SELECT = "user_id, status, profiles(username, full_name, avatar_url, avatar_kind, icon_id, role)"
 
 
 def _participant_row(row: dict) -> dict:
@@ -280,7 +280,7 @@ def get_friends_attending(event_id: str, user_id: str):
     if organizer and _norm(organizer) in {_norm(f) for f in friend_ids} and _norm(organizer) not in seen:
         profiles = (
             supabase.table("profiles")
-            .select("username, full_name, avatar_url, avatar_kind, icon_id")
+            .select("username, full_name, avatar_url, avatar_kind, icon_id, role")
             .eq("id", organizer)
             .execute()
         ).data
