@@ -6,9 +6,8 @@ decision-makers: kaleb
 
 # Caller Identity Forwarding, Blocking Visibility, and Assistant Personalization
 
-**ID**: `cpt-eventbackend-adr-caller-identity-blocking`
 
-## Table of Contents
+<!-- toc -->
 
 - [Context and Problem Statement](#context-and-problem-statement)
 - [Decision Drivers](#decision-drivers)
@@ -17,8 +16,12 @@ decision-makers: kaleb
   - [Consequences](#consequences)
   - [Confirmation](#confirmation)
 - [Pros and Cons of the Options](#pros-and-cons-of-the-options)
+  - [Option 3 (Chosen: Forward caller ID and minimal JWT user context)](#option-3-chosen-forward-caller-id-and-minimal-jwt-user-context)
 - [Traceability](#traceability)
 
+<!-- /toc -->
+
+**ID**: `cpt-eventbackend-adr-caller-identity-blocking`
 ## Context and Problem Statement
 
 `POST /api/assistant/tools/search-events` and `POST /api/assistant/chat` authenticated incoming requests via JWT dependencies (`get_current_user`), but did not forward the caller's identity (`user.id` or user metadata) to the underlying services. As reported in Issue #225, this allowed events organized by users who blocked the caller (or whom the caller blocked) to remain visible through assistant search. Additionally, conversational responses lacked caller personalization.

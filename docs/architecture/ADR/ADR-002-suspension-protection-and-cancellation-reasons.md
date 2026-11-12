@@ -6,9 +6,8 @@ decision-makers: [Engineering Team]
 
 # Protection of Suspension Fields and Automatic Tracking of Administrator Dates and Cancellation Reasons
 
-**ID**: `cpt-eventbackend-adr-suspension-protection-and-cancellation-reasons`
 
-## Table of Contents
+<!-- toc -->
 
 - [Context and Problem Statement](#context-and-problem-statement)
 - [Decision Drivers](#decision-drivers)
@@ -17,8 +16,13 @@ decision-makers: [Engineering Team]
   - [Consequences](#consequences)
   - [Confirmation](#confirmation)
 - [Pros and Cons of the Options](#pros-and-cons-of-the-options)
+  - [Option 1: Backend-Only Checks](#option-1-backend-only-checks)
+  - [Option 2: Database Triggers + Backend Defense-in-Depth](#option-2-database-triggers--backend-defense-in-depth)
 - [Traceability](#traceability)
 
+<!-- /toc -->
+
+**ID**: `cpt-eventbackend-adr-suspension-protection-and-cancellation-reasons`
 ## Context and Problem Statement
 
 The implementation for issues #189, #191, and #192 introduced `suspended_at`, `suspension_reason`, `admin_since`, and `cancellation_reason`, but left three critical gaps (Issue #232):
