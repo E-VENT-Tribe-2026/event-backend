@@ -3,7 +3,9 @@
 Removing marks the row (removed_at, removed_by); nothing is deleted. Order of a removal:
   1. mark it removed (only if it is not removed yet, so two administrators cannot both do it);
   2. give the owner the warning (a failure undoes step 1, so the removal can be retried; the
-     warning is idempotent, so a retry never warns twice);
+     warning is marked with removal_key, so a retry after a lost response
+     reuses this removal's own warning and never an earlier manual or unrelated warning about
+     the same content, #236 and #255);
   3. notify the owner once ("Your content was removed");
   4. write the audit entry, with the report when the removal came from one;
   5. for an upcoming event, notify its participants (in the background: it can take long).
