@@ -65,13 +65,32 @@ class TestAuditAndFanOut:
         assert order == ["audit", "participants"]
 
 
+def _keyed(db, key):
+    return [w for w in db.tables["warnings"] if w.get("removal_key") == key]
+
+
+def _manual_warning(db, user_id, about_type, about_id, reason="manual reason"):
+    """A warning an administrator gave by hand: it has no removal_key."""
+    return db.add("warnings", {
+        "user_id": user_id, "admin_id": ADMIN2, "reason": reason, "about_type": about_type,
+        "about_id": about_id, "removal_key": None, "acknowledged_at": None, "withdrawn_at": None,
+    })
+
+
 class TestWarningIsIdempotent:
-    def test_same_content_is_not_warned_twice(self, db):
+    def test_same_content_is_not_warned_twice_and_a_manual_warning_is_not_reused(self, db):
+        """Ticket #255: only the removal's own (keyed) warning is reused, never a manual one."""
         from app.services.warning_service import give_removal_warning
 
+        manual = _manual_warning(db, ORG, "event", EVENT)
+        manual_before = dict(manual)
         first = give_removal_warning(ORG, ADMIN, "reason", "event", EVENT)
         second = give_removal_warning(ORG, ADMIN2, "reason again", "event", EVENT)
-        assert first["id"] == second["id"] and len(db.tables["warnings"]) == 1
+        key = f"event:{EVENT}"
+        assert first["id"] == second["id"] and first["id"] != manual["id"]
+        assert len(_keyed(db, key)) == 1 and len(db.tables["warnings"]) == 2
+        assert first["reason"] == "reason" and first["removal_key"] == key
+        assert manual == manual_before  # the manual warning is untouched
 
     def test_retry_after_a_lost_warning_response_does_not_warn_twice(self, db):
         """The warning was stored but the call failed: the removal is undone, the retry reuses the warning."""
@@ -85,11 +104,34 @@ class TestWarningIsIdempotent:
             raise RuntimeError("connection reset")
 
         with patch.object(warning_service, "_insert_warning", insert_then_fail):
-            assert remove_event().status_code == 500
+            r = remove_event()
+        assert r.status_code == 500 and code(r) == "removal_failed"
         assert _event(db, EVENT)["removed_at"] is None
         assert remove_event().status_code == 200
-        assert len(db.tables["warnings"]) == 1
-        assert db.tables["notifications"][0]["warning_id"] == stored[0]["id"]
+        assert len(db.tables["warnings"]) == 1 and len(_keyed(db, f"event:{EVENT}")) == 1
+        assert db.tables["notifications"][0]["warning_id"] == stored[0]["id"] == db.tables["warnings"][0]["id"]
+
+    def test_retry_reuses_only_the_keyed_warning_not_a_manual_one(self, db):
+        from app.services import warning_service
+
+        manual = _manual_warning(db, ORG, "event", EVENT)
+        real = warning_service._insert_warning
+        stored = []
+
+        def insert_then_fail(*args, **kwargs):
+            stored.append(real(*args, **kwargs))
+            raise RuntimeError("connection reset")
+
+        with patch.object(warning_service, "_insert_warning", insert_then_fail):
+            assert remove_event().status_code == 500
+        assert len(stored) == 1  # the manual warning was not reused, so the insert was attempted
+        body = remove_event().json()
+        assert len(db.tables["warnings"]) == 2 and len(_keyed(db, f"event:{EVENT}")) == 1
+        keyed = _keyed(db, f"event:{EVENT}")[0]
+        assert keyed["id"] == stored[0]["id"] != manual["id"]
+        assert body["warning_id"] == keyed["id"]
+        assert [n["warning_id"] for n in notes(db, ORG, "content_removed")] == [keyed["id"]]
+        assert manual["reason"] == "manual reason" and manual.get("removal_key") is None
 
 
 class TestUndo:
