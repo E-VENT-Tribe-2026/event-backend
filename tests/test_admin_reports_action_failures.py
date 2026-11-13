@@ -374,6 +374,17 @@ def test_details_failing_once_are_retried_and_the_normal_body_is_returned(db, in
     _assert_closed_response(db, res, 1, status, outcome)                # the full live body, like GET
 
 
+@pytest.mark.parametrize("kind", ["user", "message", "event"])
+def test_fallback_body_carries_no_target_user(db, inject, kind):
+    _seed(db, kind)
+    inject(_reports_details_read, RuntimeError("reports unreadable"), skip=1, times=None)
+    res = _act(action="warn")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "target_user" in body and "target_user_is_admin" in body
+    assert body["target_user"] is None and body["target_user_is_admin"] is False
+
+
 @pytest.mark.parametrize("kind,action", [("message", "warn"), ("user", "suspend"), ("event", "warn"),
                                          ("event", "remove_content"), ("message", "remove_content")])
 def test_details_failing_every_time_still_answers_200_with_a_fallback_body(db, inject, caplog, kind, action):

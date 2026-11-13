@@ -70,7 +70,8 @@ COMBOS = ([(k, a) for a in ("warn", "suspend") for k in KINDS]
 PERSON_KEYS = {"id", "username", "full_name", "display_name", "avatar_kind", "icon_id", "avatar_url"}
 DETAIL_KEYS = {"id", "status", "reason", "description", "created_at", "origin", "reporter", "target_type",
                "reported", "event", "chat_context", "outcome", "closed_by", "closed_at", "content_removed",
-               "reported_user_is_administrator", "assigned_to"}
+               "reported_user_is_administrator", "assigned_to", "target_user",
+               "target_user_is_admin"}
 
 
 # ---- world --------------------------------------------------------------------------------------
