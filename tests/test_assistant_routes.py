@@ -18,6 +18,13 @@ def authenticated_user():
     app.dependency_overrides.pop(get_current_user, None)
 
 
+@pytest.fixture(autouse=True)
+def stored_turns():
+    """Chat tests must not write history to the real database."""
+    with patch("app.services.assistant_service.record_exchange") as record:
+        yield record
+
+
 def _messages():
     return [
         {"role": "user", "content": "Hello"},
@@ -32,7 +39,7 @@ def _provider_response(content="Here is an explanation."):
     )
 
 
-def test_assistant_chat_passes_the_signed_in_user():
+def test_assistant_chat_passes_the_signed_in_user(stored_turns):
     with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
         "app.services.assistant_service.run_agent_workflow",
         return_value={"reply": "Here is an explanation."},
@@ -46,6 +53,8 @@ def test_assistant_chat_passes_the_signed_in_user():
     assert response.status_code == 200
     assert response.json() == {"reply": "Here is an explanation."}
     assert run.call_args.kwargs["user_id"] == "u1"
+    stored_turns.assert_called_once()
+    assert stored_turns.call_args.args[:3] == ("u1", "Hello", "Here is an explanation.")
 
 
 def test_assistant_chat_returns_the_updated_draft():
@@ -200,7 +209,7 @@ def test_assistant_chat_does_not_accept_a_client_system_prompt():
     assert response.status_code == 422
 
 
-def test_provider_failure_returns_safe_error_and_logs_only_safe_diagnostics(caplog):
+def test_provider_failure_returns_safe_error_and_logs_only_safe_diagnostics(caplog, stored_turns):
     secret_marker = "provider-secret-marker"
     with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
         "app.services.assistant_service.OpenAI"
@@ -217,6 +226,7 @@ def test_provider_failure_returns_safe_error_and_logs_only_safe_diagnostics(capl
     assert secret_marker not in response.text
     assert "RuntimeError" in caplog.text
     assert secret_marker not in caplog.text
+    stored_turns.assert_not_called()
 
 
 def test_assistant_chat_does_not_query_supabase_tables():

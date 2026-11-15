@@ -7,6 +7,7 @@ from openai import OpenAI
 from app.core.config import settings
 from app.schemas.assistant_schema import AssistantMessage
 from app.agents.graph import create_agent_graph
+from app.services.assistant_conversation_service import record_exchange
 from app.agents.guardian import GuardianAgent, GUARDIAN_PROMPT
 from app.agents.main_agent import MAIN_AGENT_PROMPT
 from app.agents.state import AgentState
@@ -171,4 +172,10 @@ def generate_reply(
     issues = _issue_messages(metadata.get("validation_issues"))
     if issues:
         payload["validation_issues"] = issues
+    if viewer_id and payload["reply"]:
+        latest_user = next((message.content for message in reversed(messages) if message.role == "user"), "")
+        try:
+            record_exchange(viewer_id, latest_user, payload["reply"], metadata if isinstance(metadata, dict) else {})
+        except Exception:
+            logger.exception("Could not store the assistant turn")
     return payload

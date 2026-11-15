@@ -34,3 +34,20 @@ class AssistantChatResponse(BaseModel):
     reply: str = Field(min_length=1)
     draft: Optional[dict[str, Any]] = None
     validation_issues: Optional[list[str]] = None
+
+
+class AssistantHistoryMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantHistoryResponse(BaseModel):
+    conversation_id: Optional[str] = None
+    messages: list[AssistantHistoryMessage] = Field(default_factory=list)
+
+
+class AssistantConversationResponse(BaseModel):
+    conversation_id: str
