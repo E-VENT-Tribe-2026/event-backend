@@ -633,6 +633,11 @@ def test_warn_or_suspend_when_the_target_is_now_an_administrator_is_400(db, kind
 def test_suspend_an_already_suspended_account_is_409_already_suspended(db, kind):
     _seed(db, kind)
     _profile_row(db, TOM).update(suspended_at="2026-10-15T00:00:00+00:00", suspension_reason="earlier")
+    # A completed suspension (#264): his events are cancelled and his joins removed, so nothing is left to finish.
+    for ev in db.tables["events"]:
+        if ev.get("created_by") == TOM:
+            ev["status"] = "cancelled"
+    db.tables["event_participants"] = [p for p in db.tables["event_participants"] if p["user_id"] != TOM]
     before = _snapshot(db)
     res = _act(action="suspend")
     assert res.status_code == 409, res.text

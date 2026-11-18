@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from app.db.supabase_client import supabase
-from app.services.admin_service import end_upcoming_activity
+from app.services.admin_service import (
+    end_upcoming_activity, select_upcoming_joined_rows, select_upcoming_organized_events,
+)
 from app.services.audit_service import record_audit
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,14 @@ def _end_upcoming_activity(user_id: str, suspended_since) -> tuple[int, int]:
         raise _suspension_effects_incomplete(user_id, suspended_since)
 
 
+def has_pending_suspension_effects(user_id: str) -> bool:
+    """True when a suspension of this user still has events to cancel or participations to remove (read-only).
+    A failing read propagates rather than answering "nothing pending"; the caller decides
+    (validate_suspend treats it as pending so suspend_user can answer the coded 503)."""
+    now_dt = datetime.now(timezone.utc)
+    return bool(select_upcoming_organized_events(user_id, now_dt) or select_upcoming_joined_rows(user_id, now_dt))
+
+
 def suspend_user(user_id: str, admin_id: str, reason: str) -> dict:
     profile = _load_user(user_id)
     if profile.get("role") in ("administrator", "admin"):
@@ -95,6 +105,10 @@ def suspend_user(user_id: str, admin_id: str, reason: str) -> dict:
     if already_suspended and cancelled == 0 and removed == 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="This account is already suspended.")
+
+    if already_suspended:
+        logger.info(f"Recovered the suspension of user {user_id}: "
+                    f"{cancelled} events cancelled, {removed} participations removed.")
 
     record_audit(
         action="account_suspended",

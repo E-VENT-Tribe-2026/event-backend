@@ -25,7 +25,7 @@ from app.services.admin_report_service import get_report_details, public_status
 from app.services.audit_service import record_audit
 from app.services.content_removal_service import remove_event, remove_message
 from app.services.report_service import report_error
-from app.services.suspension_service import suspend_user
+from app.services.suspension_service import has_pending_suspension_effects, suspend_user
 from app.services.warning_service import give_warning
 
 logger = logging.getLogger(__name__)
@@ -195,11 +195,23 @@ def validate_warn(report: dict) -> dict:
     return target
 
 
+def _suspension_effects_pending(user_id: str) -> bool:
+    """Pre-check read; a failing read counts as "pending" so the request goes on to the claim, where
+    suspend_user answers with the coded 503 suspension_effects_incomplete and the report is reopened."""
+    try:
+        return has_pending_suspension_effects(user_id)
+    except Exception as err:
+        logger.warning("Could not check for pending suspension effects (%s: %s); treating as pending.",
+                       type(err).__name__, err)
+        return True
+
+
 def validate_suspend(report: dict) -> dict:
     target = resolve_target(report)
     if is_admin_role(target.get("role")):
         raise report_error(400, "reported_user_is_administrator", "Administrator accounts cannot be suspended.")
-    if target.get("suspended_at"):
+    # Suspended with leftover event effects (#264): let the retry through to finish them.
+    if target.get("suspended_at") and not _suspension_effects_pending(target["id"]):
         raise report_error(409, "already_suspended", "This account is already suspended.")
     return target
 
@@ -554,7 +566,7 @@ def act_on_report(report_id: int, admin_id: str, action: str, reason: str | None
     elif action == "suspend":
         target = validate_suspend(report)
         run = lambda: run_suspend(target, admin_id, reason)
-        effect = None   # profile may already be suspended; leftover event effects are retried on POST /suspend
+        effect = None   # profile may already be suspended; leftover event effects are finished by the next Suspend, standalone or through a report (#264)
     else:
         validate_remove_content(report)
         run = lambda: run_remove_content(report, admin_id, background_tasks)

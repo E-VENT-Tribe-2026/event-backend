@@ -732,6 +732,50 @@ def get_admin_event_details(event_id: str) -> dict:
         "removed_by": removed_by,
     }
 
+def select_upcoming_organized_events(user_id: str, now_dt: datetime) -> list[dict]:
+    """Events organized by the user that are upcoming, not cancelled and not removed."""
+    res = (
+        supabase.table("events")
+        .select("id, title, start_datetime, status, removed_at")
+        .eq("created_by", user_id)
+        .neq("status", "cancelled")
+        .execute()
+    )
+    selected = []
+    for ev in (res.data or []):
+        if ev.get("removed_at"):
+            continue  # an event an administrator removed (#236) is not cancelled on top of that
+        start_dt = _parse_iso_datetime(ev.get("start_datetime"))
+        if start_dt and start_dt >= now_dt:
+            selected.append(ev)
+    return selected
+
+
+def select_upcoming_joined_rows(user_id: str, now_dt: datetime) -> list[dict]:
+    """event_participants rows of the user whose event is upcoming."""
+    joined_rows = (
+        supabase.table("event_participants")
+        .select("id, event_id")
+        .eq("user_id", user_id)
+        .execute()
+    ).data or []
+    ev_ids = [r["event_id"] for r in joined_rows if r.get("event_id")]
+    if not ev_ids:
+        return []
+    events_info = (
+        supabase.table("events")
+        .select("id, start_datetime")
+        .in_("id", ev_ids)
+        .execute()
+    ).data or []
+    upcoming_event_ids = set()
+    for e in events_info:
+        start_dt = _parse_iso_datetime(e.get("start_datetime"))
+        if start_dt and start_dt >= now_dt:
+            upcoming_event_ids.add(e["id"])
+    return [r for r in joined_rows if r.get("event_id") in upcoming_event_ids]
+
+
 def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_text: str) -> tuple[int, int]:
     """
     Shared by "make administrator" (#190) and "suspend" (#192):
@@ -747,78 +791,48 @@ def end_upcoming_activity(user_id: str, cancellation_reason: str, notification_t
     # a. Cancel upcoming events organized by this user. Required DB writes are not
     # swallowed: a failed cancel must be retried. Notify/email stay best-effort.
     cancelled_events_count = 0
-    org_events_res = (
-        supabase.table("events")
-        .select("id, title, start_datetime, status, removed_at")
-        .eq("created_by", user_id)
-        .neq("status", "cancelled")
-        .execute()
-    )
-    for ev in (org_events_res.data or []):
-        if ev.get("removed_at"):
-            continue  # an event an administrator removed (#236) is not cancelled on top of that
-        start_dt = _parse_iso_datetime(ev.get("start_datetime"))
-        if start_dt and start_dt >= now_dt:
-            ev_id = ev["id"]
-            supabase.table("events").update({
-                "status": "cancelled",
-                "cancellation_reason": cancellation_reason,
-                "updated_at": now_iso
-            }).eq("id", ev_id).execute()
+    for ev in select_upcoming_organized_events(user_id, now_dt):
+        ev_id = ev["id"]
+        upd = supabase.table("events").update({
+            "status": "cancelled",
+            "cancellation_reason": cancellation_reason,
+            "updated_at": now_iso
+        }).eq("id", ev_id).neq("status", "cancelled").execute()
+        if not upd.data:
+            continue  # cancelled meanwhile by someone else, who notified: do not do it twice
 
-            cancelled_events_count += 1
+        cancelled_events_count += 1
 
-            try:
-                from app.services.notification_service import create_notification
-                part_res = (
-                    supabase.table("event_participants")
-                    .select("user_id")
-                    .eq("event_id", ev_id)
-                    .execute()
-                )
-                for p in (part_res.data or []):
-                    if p.get("user_id") and p["user_id"] != user_id:
-                        create_notification(
-                            p["user_id"],
-                            ev_id,
-                            "event_cancelled",
-                            notification_text.format(title=ev.get("title"))
-                        )
-            except Exception as n_err:
-                logger.warning(f"Failed to notify participants for cancelled event {ev_id}: {n_err}")
+        try:
+            from app.services.notification_service import create_notification
+            part_res = (
+                supabase.table("event_participants")
+                .select("user_id")
+                .eq("event_id", ev_id)
+                .execute()
+            )
+            for p in (part_res.data or []):
+                if p.get("user_id") and p["user_id"] != user_id:
+                    create_notification(
+                        p["user_id"],
+                        ev_id,
+                        "event_cancelled",
+                        notification_text.format(title=ev.get("title"))
+                    )
+        except Exception as n_err:
+            logger.warning(f"Failed to notify participants for cancelled event {ev_id}: {n_err}")
 
-            try:
-                from app.services.event_service import _email_participants
-                _email_participants(ev, "cancellation")
-            except Exception as em_err:
-                logger.warning(f"Failed to email participants for cancelled event {ev_id}: {em_err}")
+        try:
+            from app.services.event_service import _email_participants
+            _email_participants(ev, "cancellation")
+        except Exception as em_err:
+            logger.warning(f"Failed to email participants for cancelled event {ev_id}: {em_err}")
 
     # b. Take them off upcoming events they joined.
     joined_events_removed_count = 0
-    joined_res = (
-        supabase.table("event_participants")
-        .select("id, event_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    joined_rows = joined_res.data or []
-    if joined_rows:
-        ev_ids = [r["event_id"] for r in joined_rows if r.get("event_id")]
-        if ev_ids:
-            events_info = (
-                supabase.table("events")
-                .select("id, start_datetime")
-                .in_("id", ev_ids)
-                .execute()
-            ).data or []
-            upcoming_event_ids = {
-                e["id"] for e in events_info
-                if _parse_iso_datetime(e.get("start_datetime")) and _parse_iso_datetime(e.get("start_datetime")) >= now_dt
-            }
-            for r in joined_rows:
-                if r.get("event_id") in upcoming_event_ids:
-                    supabase.table("event_participants").delete().eq("id", r["id"]).execute()
-                    joined_events_removed_count += 1
+    for r in select_upcoming_joined_rows(user_id, now_dt):
+        supabase.table("event_participants").delete().eq("id", r["id"]).execute()
+        joined_events_removed_count += 1
 
     return cancelled_events_count, joined_events_removed_count
 
