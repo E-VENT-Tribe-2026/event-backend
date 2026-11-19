@@ -6,9 +6,8 @@ decision-makers: [Engineering Team]
 
 # Consolidation and Ordering of Database Migrations for Clean Bootstrap
 
-**ID**: `cpt-eventbackend-adr-database-migration-ordering`
 
-## Table of Contents
+<!-- toc -->
 
 - [Context and Problem Statement](#context-and-problem-statement)
 - [Decision Drivers](#decision-drivers)
@@ -17,8 +16,13 @@ decision-makers: [Engineering Team]
   - [Consequences](#consequences)
   - [Confirmation](#confirmation)
 - [Pros and Cons of the Options](#pros-and-cons-of-the-options)
+  - [Option 1: Single Squash Migration](#option-1-single-squash-migration)
+  - [Option 2: Baseline Migration + Idempotent Ordering](#option-2-baseline-migration--idempotent-ordering)
 - [Traceability](#traceability)
 
+<!-- /toc -->
+
+**ID**: `cpt-eventbackend-adr-database-migration-ordering`
 ## Context and Problem Statement
 
 A fresh database initialization fails during `supabase db push` because foundational tables (`profiles`, `events`, `friend_requests`, `friendships`, `event_chats`) were previously created manually or referenced by alteration and RLS migrations before their corresponding `CREATE TABLE` scripts ran (Issue #181). How should the project structure and order migrations so both clean fresh instances and existing environments remain fully supported and reproducible?
