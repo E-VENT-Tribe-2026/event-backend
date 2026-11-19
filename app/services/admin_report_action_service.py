@@ -477,7 +477,8 @@ def _fallback_details(report: dict, status_value: str, outcome: str, admin_id: s
     """The body of AdminReportDetailResponse built from the report row loaded before the action plus what
     the action established, for when the details cannot be loaded. Best known, not live: people and the
     event card carry only their ids (title, names, avatars are null), content_removed is true only for
-    a removal and reported_user_is_administrator is false."""
+    a removal and reported_user_is_administrator is false. target_user and target_user_is_admin degrade the
+    same way: target_user is None (here 'unknown', not 'gone') and target_user_is_admin is false."""
     target = report["target_type"]
     event_ref = {"id": str(report["event_id"]), "title": None, "name": None} if report.get("event_id") else None
     from_chat = report.get("origin") == "event_chat"
@@ -504,6 +505,8 @@ def _fallback_details(report: dict, status_value: str, outcome: str, admin_id: s
         "closed_at": closed_at,
         "content_removed": content_removed,
         "reported_user_is_administrator": False,
+        "target_user": None,
+        "target_user_is_admin": False,
         "assigned_to": _person_ref(report.get("assigned_to")),
     }
 

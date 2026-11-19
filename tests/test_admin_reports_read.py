@@ -301,7 +301,8 @@ def test_deleted_message_author_gives_null_user(db):
 
 DETAIL_KEYS = {"id", "status", "reason", "description", "created_at", "origin", "reporter", "target_type",
                "reported", "event", "chat_context", "outcome", "closed_by", "closed_at", "content_removed",
-               "reported_user_is_administrator", "assigned_to"}
+               "reported_user_is_administrator", "assigned_to", "target_user",
+               "target_user_is_admin"}
 
 
 def _detail(rid):

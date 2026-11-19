@@ -76,6 +76,11 @@ class AdminReportDetailResponse(AdminReportItem):
     closed_at: Optional[str] = None
     content_removed: bool = False
     reported_user_is_administrator: bool = False
+    # Who Warn and Suspend apply to: the reported user, the message's author or the event's organizer.
+    # None when the target no longer exists: the profile is gone, or an event report's event is gone (deleted,
+    # event_id null). target_user_is_admin equals reported_user_is_administrator.
+    target_user: Optional[PersonSummary] = None
+    target_user_is_admin: bool = False
 
 
 class ReportHistoryEntry(BaseModel):

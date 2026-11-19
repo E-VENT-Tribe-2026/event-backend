@@ -157,6 +157,10 @@ def get_report_details(report_id: int) -> dict:
 
     content_removed is true when the reported event/message is marked removed or no longer exists;
     it is always false for a user report.
+
+    target_user is the person warn and suspend apply to (see resolve_target): the reported user, the message
+    author or the event organizer; None when that profile or the event is gone. target_user_is_admin is
+    that person's live admin state and always equals reported_user_is_administrator.
     """
     try:
         res = supabase.table("reports").select("*").eq("id", report_id).limit(1).execute()
@@ -166,21 +170,24 @@ def get_report_details(report_id: int) -> dict:
 
         target = row["target_type"]
         event = _events_by_id([row.get("event_id")]).get(row.get("event_id"))
+        organizer_id = event.get("created_by") if event else None
         people = _people_by_id([
             row.get("reporter_id"), row.get("reported_user_id"), row.get("closed_by"), row.get("assigned_to"),
+            organizer_id,
         ])
         detail = _item(row, people, {row.get("event_id"): event} if event else {})
 
         if target == "event":
             # Deleted content counts as removed: the event is marked removed or is gone altogether.
             content_removed = event is None or bool(event.get("removed_at"))
-            reported_user_id = event.get("created_by") if event else None
+            reported_user_id = organizer_id
         else:
             # A message counts as removed when marked removed or deleted; a user report has no removable content.
             content_removed = target == "message" and _message_removed(row["message_id"])
             reported_user_id = row.get("reported_user_id")
 
         from_chat = row["origin"] == "event_chat"
+        target_is_admin = is_admin_role(_role_of(reported_user_id))
         detail.update({
             "description": row.get("description"),
             "event": _report_event_card(event),
@@ -189,7 +196,11 @@ def get_report_details(report_id: int) -> dict:
             "closed_by": people.get(row.get("closed_by")),
             "closed_at": str(row["closed_at"]) if row.get("closed_at") else None,
             "content_removed": content_removed,
-            "reported_user_is_administrator": is_admin_role(_role_of(reported_user_id)),
+            "reported_user_is_administrator": target_is_admin,
+            # The person warn and suspend apply to (see resolve_target). None when the target no longer exists:
+            # the profile is gone, or an event report's event is gone (deleted, event_id null).
+            "target_user": people.get(reported_user_id),
+            "target_user_is_admin": target_is_admin,
         })
         return detail
     except HTTPException:
