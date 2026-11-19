@@ -95,6 +95,11 @@ def _find_removal_warning(user_id: str, removal_key: str) -> dict | None:
     return res.data[0] if res.data else None
 
 
+def find_removal_warning(user_id: str, removal_key: str) -> dict | None:
+    """Public name of _find_removal_warning (the warning of one removal, by its removal_key)."""
+    return _find_removal_warning(user_id, removal_key)
+
+
 def _is_unique_violation(exc: Exception) -> bool:
     """True for a Postgres unique violation (SQLSTATE 23505): structured code first, then the text."""
     if getattr(exc, "code", None) == "23505":

@@ -25,7 +25,7 @@ from app.core.dependencies import is_admin_role
 from app.db.supabase_client import supabase
 from app.services.admin_report_service import get_report_details, public_status
 from app.services.audit_service import record_audit
-from app.services.content_removal_service import remove_event, remove_message
+from app.services.content_removal_service import pending_removal_steps, remove_event, remove_message
 from app.services.report_service import report_error
 from app.services.suspension_service import has_pending_suspension_effects, suspend_user
 from app.services.warning_service import give_warning
@@ -249,8 +249,12 @@ def validate_remove_content(report: dict) -> None:
         content = _first(
             supabase.table("event_chats").select("id, removed_at").eq("id", report["message_id"]).limit(1).execute()
         )
-    # Deleted content counts as removed, like in the report details.
-    if content is None or content.get("removed_at"):
+    # Deleted content counts as removed, like in the report details. Removed content with follow-up
+    # steps missing (#256) is let through, so the retry can finish them.
+    # A failing read in pending_removal_steps is not treated as "pending" (unlike #264): it is an uncoded 500
+    # before any claim, nothing written. The service re-runs the same read after the claim, so treating a failed
+    # read as pending would only add a claim and a revert.
+    if content is None or (content.get("removed_at") and not pending_removal_steps(kind, content["id"])):
         raise report_error(409, "already_removed", "This content is already removed.")
 
 
@@ -468,12 +472,18 @@ def _is_removal_incomplete(exc: BaseException) -> bool:
             and exc.detail.get("code") == "removal_incomplete")
 
 
+def _is_followups_incomplete(exc: BaseException) -> bool:
+    return (isinstance(exc, HTTPException) and isinstance(exc.detail, dict)
+            and exc.detail.get("code") == "removal_followups_incomplete")
+
+
 def _close(report: dict, status_value: str, outcome: str, admin_id: str, action: str, run,
            effect_check=None) -> str:
     """Claim, run the service, and reopen the report when the service fails. Returns the claim's timestamp.
 
     The reused services are not atomic: they can raise after their work is committed. effect_check(claimed_at)
     tells whether it is (True) or not (False); None means a failure cannot leave an effect (suspension).
+      * removal_followups_incomplete: always reopen and raise it (the retry finishes the missing steps);
       * effect present: keep the report closed, log the original error, carry on as a success; except
         removal_incomplete (removed, owner not warned, removal not undone): the closure is audited
         with removal:incomplete and the error is raised unchanged, so the administrator sees it;
@@ -496,6 +506,10 @@ def _close(report: dict, status_value: str, outcome: str, admin_id: str, action:
         run()
     except BaseException as exc:
         state = "absent"
+        if _is_followups_incomplete(exc):
+            # Removed and warned, but steps are missing: reopen so the retry through the report finishes them.
+            revert(report_id, status_value, admin_id, outcome, action, claimed_at)
+            raise
         if effect_check is not None:
             try:
                 state = "present" if effect_check(claimed_at) else "absent"

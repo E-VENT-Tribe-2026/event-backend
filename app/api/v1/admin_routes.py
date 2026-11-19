@@ -246,7 +246,12 @@ def get_event(
     """
     return get_admin_event_details(event_id=event_id)
 
-@router.post("/events/{event_id}/remove", response_model=RemoveEventResponse)
+_REMOVAL_503 = {503: {"description": "removal_followups_incomplete: the content is removed (and any warning "
+                                     "kept) but the owner notification or the audit entry is missing; the "
+                                     "body lists them in `missing`. Repeat the same request to finish."}}
+
+
+@router.post("/events/{event_id}/remove", response_model=RemoveEventResponse, responses=_REMOVAL_503)
 @_slash("/events/{event_id}/remove", ["POST"], response_model=RemoveEventResponse)
 def post_remove_event(
     background_tasks: BackgroundTasks,
@@ -258,12 +263,16 @@ def post_remove_event(
     Marks an event as removed (never deletes it). Users no longer see it, the organizer is notified
     and warned, the participants of an upcoming event are notified, and the audit log records it.
     Send report_id when the removal comes from a report. Refused when already removed.
+    If the owner notification or the audit entry could not be stored, the event stays removed and the
+    response is 503 removal_followups_incomplete (with `missing`); repeating the same request creates only
+    the missing records and finishes the removal.
     """
     return remove_event(event_id=event_id, admin_id=admin.id, report_id=body.report_id if body else None,
                         background_tasks=background_tasks)
 
 
-@router.post("/events/{event_id}/messages/{message_id}/remove", response_model=RemoveMessageResponse)
+@router.post("/events/{event_id}/messages/{message_id}/remove", response_model=RemoveMessageResponse,
+             responses=_REMOVAL_503)
 @_slash("/events/{event_id}/messages/{message_id}/remove", ["POST"], response_model=RemoveMessageResponse)
 def post_remove_message(
     event_id: str = Path(..., description="Event whose chat holds the message"),
@@ -275,6 +284,9 @@ def post_remove_message(
     Marks a chat message as removed (never deletes it). The chat shows it as removed, without its text,
     the sender is notified and warned, and the audit log records it.
     Send report_id when the removal comes from a report. Refused when already removed or for a system message.
+    If the owner notification or the audit entry could not be stored, the message stays removed and the
+    response is 503 removal_followups_incomplete (with `missing`); repeating the same request creates only
+    the missing records and finishes the removal.
     """
     return remove_message(event_id=event_id, message_id=message_id, admin_id=admin.id,
                           report_id=body.report_id if body else None)
@@ -414,7 +426,10 @@ def post_dismiss_report(
     return dismiss_report(report_id=report_id, admin_id=admin.id)
 
 
-@router.post("/reports/{report_id}/action", response_model=AdminReportDetailResponse)
+@router.post("/reports/{report_id}/action", response_model=AdminReportDetailResponse,
+             responses={503: {"description": "Also removal_followups_incomplete for remove_content: the content "
+                                             "is removed but a follow-up record is missing; the report is "
+                                             "reopened. Repeat the same request to finish the removal."}})
 @_slash("/reports/{report_id}/action", ["POST"], response_model=AdminReportDetailResponse)
 def post_report_action(
     body: ReportActionRequest,
@@ -426,6 +441,9 @@ def post_report_action(
     Acts on an open report: warn or suspend the reported user (for an event, its organizer), or remove
     the reported event or message. A reason is required for warn and suspend. Closes the report.
     Refused unless the caller is the assignee.
+    For remove_content, a 503 removal_followups_incomplete means the content is removed but the owner
+    notification or audit entry is missing: the report is reopened, and repeating the same request
+    finishes the removal and closes the report.
     """
     return act_on_report(report_id=report_id, admin_id=admin.id, action=body.action, reason=body.reason,
                          background_tasks=background_tasks)

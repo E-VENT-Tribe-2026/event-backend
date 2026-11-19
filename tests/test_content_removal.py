@@ -236,20 +236,35 @@ class TestWarningAndNotifications:
         assert db.tables["notifications"] == [] and db.tables["logs"] == []
         assert remove_event().status_code == 200
 
-    def test_failed_notifications_do_not_fail_the_removal(self, db):
+    def test_failed_owner_notification_keeps_the_removal_and_reports_it_unfinished(self, db):
+        """#256: the removal and warning stay and the audit entry is written, but the answer is the coded 503;
+        the retry then completes the missing notification."""
         real_table = db.table
 
         def table(name):
             query = real_table(name)
             if name == "notifications":
-                query.execute = lambda: (_ for _ in ()).throw(RuntimeError("db down"))
+                real_execute = query.execute
+
+                def execute():
+                    if query.action == "insert":
+                        raise RuntimeError("db down")
+                    return real_execute()
+
+                query.execute = execute
             return query
 
         with patch.object(db, "table", table):
             r = remove_event()
-        assert r.status_code == 200 and r.json()["warning_id"]
+        assert r.status_code == 503 and code(r) == "removal_followups_incomplete"
+        assert r.json()["detail"]["missing"] == ["owner_notification"]
         assert db.tables["warnings"] and next(e for e in db.tables["events"] if e["id"] == EVENT)["removed_at"]
         assert db.tables["logs"][0]["type"] == "event_removed"  # still audited
+        assert notes(db, ORG, "content_removed") == []
+        retry = remove_event()
+        assert retry.status_code == 200 and retry.json()["warning_id"] == db.tables["warnings"][0]["id"]
+        assert len(notes(db, ORG, "content_removed")) == 1 and len(db.tables["warnings"]) == 1
+        assert len(db.tables["logs"]) == 1
 
 
 class TestParticipantsNotified:
