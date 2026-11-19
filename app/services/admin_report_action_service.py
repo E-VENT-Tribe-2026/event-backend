@@ -4,9 +4,10 @@ Order of every request:
   1. load the report (404) and refuse one that is not open (409), before any other check;
   2. refuse unless this administrator is the assignee (403);
   3. validate the action with reads only, so a refusal changes nothing;
-  4. claim the report: one conditional update open -> closed, so two administrators cannot both close it;
+  4. claim the report: one conditional update, open AND assigned to this administrator -> closed; the
+     loser gets 409 / 403 and never runs the action;
   5. run the existing service (warning, suspension or removal);
-  6. a failure after the claim reopens the report (only this administrator's own closure) and the
+  6. a failure after the claim reopens the report (only the closure this request made, same claimed_at) and the
      original error is raised unchanged, UNLESS the service had already done its work when it raised
      (the reused services are not atomic): then the report stays closed, the error is logged and the
      request goes on as a success, so a retry cannot warn or remove twice. When that cannot be told,
@@ -15,7 +16,8 @@ Order of every request:
      when loading them fails twice, so a success is never turned into a 500).
 """
 import logging
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
@@ -39,6 +41,27 @@ _OUTCOMES = {"warn": "warned", "suspend": "suspended", "remove_content": "conten
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_stamp_lock = threading.Lock()
+_last_stamp: datetime | None = None
+
+
+def _claim_stamp() -> str:
+    """A strictly increasing (per process) ISO UTC timestamp for a claim's closed_at.
+
+    The clock can tick coarsely (about 15.6 ms on Windows), so two requests of the same administrator could
+    draw the same instant and the loser would then pass the ownership proof (closed_by and closed_at equal).
+    A stamp not after the previous one becomes the previous one + 1 microsecond. Two processes can still
+    draw the same stamp (a window of about 1 microsecond): that is not covered here.
+    """
+    global _last_stamp
+    with _stamp_lock:
+        stamp = datetime.now(timezone.utc)
+        if _last_stamp is not None and stamp <= _last_stamp:
+            stamp = _last_stamp + timedelta(microseconds=1)
+        _last_stamp = stamp
+        return stamp.isoformat()
 
 
 def _first(resp):
@@ -232,7 +255,7 @@ def _as_service_role() -> None:
 
 def _row_of(report_id: int) -> dict | None:
     return _first(
-        supabase.table("reports").select("id, status, outcome, closed_by")
+        supabase.table("reports").select("id, status, outcome, closed_by, closed_at, assigned_to")
         .eq("id", report_id).limit(1).execute()
     )
 
@@ -242,43 +265,57 @@ def _closed_by(row: dict | None, admin_id: str) -> bool:
 
 
 def claim(report_id: int, status_value: str, outcome: str, admin_id: str, claimed_at: str | None = None) -> None:
-    """Close the report if it is still open. Re-reads the row so an empty PostgREST RETURNING is not a 409."""
+    """Close the report if it is still open AND assigned to this administrator, in one conditional update.
+
+    A non-empty result is the win. An empty one is read back once: the row is ours only when it carries this
+    request's own closed_at (PostgREST can apply an update and still return an empty body); anything else is a
+    loss and never a success, so a request that lost must not run its action:
+      * closed by anyone, also by this administrator: 409 report_closed;
+      * open but assigned to another administrator / to nobody: 403 report_assigned_to_other / report_unassigned;
+      * open and assigned to this administrator: the update did not apply; tried once more, then 500.
+    """
     _as_service_role()
+    claimed_at = claimed_at or _now()
     patch = {
         "status": status_value,
         "outcome": outcome,
         "closed_by": admin_id,
-        "closed_at": claimed_at or _now(),
+        "closed_at": claimed_at,
     }
-    claimed = (
-        supabase.table("reports")
-        .update(patch)
-        .eq("id", report_id)
-        .eq("status", "open")
-        .execute()
-    )
-    if claimed.data:
-        return
-
-    row = _row_of(report_id)
-    if row is None:
-        raise report_error(404, "report_not_found", "This report does not exist.")
-    if public_status(row.get("status")) != "open":
-        if _closed_by(row, admin_id):
+    for attempt in (1, 2):
+        claimed = (
+            supabase.table("reports")
+            .update(patch)
+            .eq("id", report_id)
+            .eq("status", "open")
+            .eq("assigned_to", admin_id)
+            .execute()
+        )
+        if claimed.data:
             return
-        raise report_error(409, "report_closed", "This report is already closed.")
 
-    _as_service_role()
-    supabase.table("reports").update(patch).eq("id", report_id).eq("status", "open").execute()
-    row = _row_of(report_id)
-    if row and public_status(row.get("status")) != "open":
-        return
+        row = _row_of(report_id)
+        if row is None:
+            raise report_error(404, "report_not_found", "This report does not exist.")
+        if public_status(row.get("status")) != "open":
+            if _is_my_claim(row, admin_id, claimed_at):
+                return
+            raise report_error(409, "report_closed", "This report is already closed.")
+        assignee = row.get("assigned_to")
+        if not assignee:
+            raise report_error(403, "report_unassigned", "Assign this report to yourself before acting on it.")
+        if not _same_id(assignee, admin_id):
+            raise report_error(403, "report_assigned_to_other", "This report is assigned to another administrator.")
+        if attempt == 1:
+            _as_service_role()
     raise report_error(500, "report_close_failed", "The report could not be closed. Please try again.")
 
 
 def revert(report_id: int, status_value: str, admin_id: str, outcome: str | None = None,
-           action: str | None = None) -> bool:
-    """Reopen the report, but only the closure this administrator made. Never raises.
+           action: str | None = None, claimed_at: str | None = None) -> bool:
+    """Reopen the report, but only the closure this request made (same status, administrator and, when given,
+    closed_at = this request's claimed_at). Another request of the same administrator closes with another
+    closed_at, so its closure is left alone. Never raises.
 
     Tries REOPEN_ATTEMPTS times (the update is idempotent). A database error counts as a failed attempt,
     also a unique violation of the open-report index (the reporter filed a new open report meanwhile).
@@ -287,14 +324,16 @@ def revert(report_id: int, status_value: str, admin_id: str, outcome: str | None
     """
     for attempt in range(1, REOPEN_ATTEMPTS + 1):
         try:
-            (
+            query = (
                 supabase.table("reports")
                 .update({"status": "open", "outcome": None, "closed_by": None, "closed_at": None})
                 .eq("id", report_id)
                 .eq("status", status_value)
                 .eq("closed_by", admin_id)
-                .execute()
             )
+            if claimed_at:
+                query = query.eq("closed_at", claimed_at)
+            query.execute()
             return True
         except Exception:
             logger.error("Could not reopen report %s (attempt %s of %s)", report_id, attempt, REOPEN_ATTEMPTS,
@@ -370,6 +409,23 @@ def _at_or_after(value, moment: str) -> bool:
     return parse(value) >= parse(moment)
 
 
+def _same_moment(a, b) -> bool:
+    """Do two timestamps (ISO strings, as written or as the database returns them) name the same instant?"""
+    if not a or not b:
+        return False
+    try:
+        return _at_or_after(str(a), str(b)) and _at_or_after(str(b), str(a))
+    except ValueError:
+        logger.warning("Could not compare timestamps %r and %r", a, b, exc_info=True)
+        return False
+
+
+def _is_my_claim(row: dict, admin_id: str, claimed_at: str) -> bool:
+    """Is the closed row the closure THIS request made? Only its own claim timestamp proves that: a closure
+    by the same administrator from another request has another closed_at."""
+    return _closed_by(row, admin_id) and _same_moment(row.get("closed_at"), claimed_at)
+
+
 def _warning_was_given(report: dict, target: dict, admin_id: str, claimed_at: str) -> bool:
     """Is there a warning from THIS administrator for this item, written since this request claimed the
     report? give_warning stamps warnings.created_at with the same ISO UTC format as claimed_at."""
@@ -415,14 +471,14 @@ def _close(report: dict, status_value: str, outcome: str, admin_id: str, action:
         failure is CRITICAL + audited for a human, and the original error is raised.
     """
     report_id = report["id"]
-    claimed_at = _now()
+    claimed_at = _claim_stamp()
     try:
         claim(report_id, status_value, outcome, admin_id, claimed_at)
     except HTTPException:
-        raise    # lost the race: nothing of ours was written, nothing to undo
+        raise    # claim refused (closed, reassigned, unassigned, gone or not applied): nothing of ours was written, nothing to undo
     except Exception:
-        # e.g. the response got lost after the server applied the update; the guarded reopen is idempotent
-        revert(report_id, status_value, admin_id, outcome, action)
+        # e.g. the response got lost after the server applied the update; reopens only the closure made with this claimed_at
+        revert(report_id, status_value, admin_id, outcome, action, claimed_at)
         raise
     try:
         run()
@@ -436,7 +492,7 @@ def _close(report: dict, status_value: str, outcome: str, admin_id: str, action:
                 logger.error("Could not check whether the action of report %s was done", report_id,
                              exc_info=True)
         if state == "absent":
-            revert(report_id, status_value, admin_id, outcome, action)
+            revert(report_id, status_value, admin_id, outcome, action, claimed_at)
             raise
         if state == "present":
             logger.error("Report %s: the action was done but the service raised afterwards; "
@@ -527,13 +583,14 @@ def _details_after_close(report: dict, status_value: str, outcome: str, admin_id
 def dismiss_report(report_id: int, admin_id: str) -> dict:
     report = load_report(report_id)
     require_assignee(report, admin_id)
-    claimed_at = _now()
+    claimed_at = _claim_stamp()
     try:
         claim(report["id"], STATUS_DISMISSED, "dismissed", admin_id, claimed_at)
     except HTTPException:
-        raise
+        raise    # claim refused (closed, reassigned, unassigned, gone or not applied): nothing of ours was written
     except Exception:
-        revert(report["id"], STATUS_DISMISSED, admin_id, "dismissed", "dismiss")
+        # e.g. the response got lost after the server applied the update; reopens only the closure made with this claimed_at
+        revert(report["id"], STATUS_DISMISSED, admin_id, "dismissed", "dismiss", claimed_at)
         raise
     record_audit(
         action="report_dismissed",
