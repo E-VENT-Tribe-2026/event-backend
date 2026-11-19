@@ -287,3 +287,41 @@ class TestCheckInRoutes:
 class TestWrongCodeLimitUsesSharedLimiter:
     def test_limit_constant_matches_existing_style(self):
         assert CHECK_IN_WRONG_CODE_LIMIT == 10
+
+
+class TestCheckInCodeGenerationAndCollisionDetection:
+    def test_generate_check_in_code_format(self):
+        from app.services.check_in_service import generate_check_in_code
+        with patch("app.services.check_in_service.secrets.randbelow", return_value=7):
+            assert generate_check_in_code() == "000007"
+        with patch("app.services.check_in_service.secrets.randbelow", return_value=482913):
+            assert generate_check_in_code() == "482913"
+
+    def test_assign_event_check_in_secrets(self):
+        from app.services.check_in_service import assign_event_check_in_secrets
+        with patch("app.services.check_in_service.secrets.randbelow", return_value=482913):
+            data = {}
+            res = assign_event_check_in_secrets(data)
+            assert res["check_in_code"] == "482913"
+            assert res["check_in_qr_content"] == "482913"
+
+    def test_is_check_in_code_collision(self):
+        from app.services.check_in_service import is_check_in_code_collision
+        # Exact constraint name in message
+        assert is_check_in_code_collision(
+            Exception('duplicate key value violates unique constraint "events_check_in_code_uniq"')
+        )
+        # PostgREST APIError style
+        mock_err = Exception("duplicate key value")
+        mock_err.code = "23505"
+        mock_err.details = "Key (check_in_code)=(482913) already exists."
+        assert is_check_in_code_collision(mock_err)
+
+        # Other constraint violation should be False
+        mock_pkey = Exception('duplicate key value violates unique constraint "events_pkey"')
+        mock_pkey.code = "23505"
+        assert not is_check_in_code_collision(mock_pkey)
+
+        # Non-DB error should be False
+        assert not is_check_in_code_collision(ValueError("something else"))
+

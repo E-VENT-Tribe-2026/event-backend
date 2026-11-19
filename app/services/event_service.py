@@ -149,7 +149,11 @@ def create_event(user_id: str, data: dict):
     data.pop("event_embedding", None)
     data.pop("check_in_code", None)
     data.pop("check_in_qr_content", None)
-    from app.services.check_in_service import assign_event_check_in_secrets
+    from app.services.check_in_service import (
+        assign_event_check_in_secrets,
+        is_check_in_code_collision,
+        MAX_CODE_RETRIES,
+    )
     assign_event_check_in_secrets(data)
     data["status"] = "active"
 
@@ -163,10 +167,23 @@ def create_event(user_id: str, data: dict):
     if embedding:
         data["event_embedding"] = embedding
 
-    # 5. Insert event
-    response = supabase.table("events").insert(data).execute()
+    # 5. Insert event — retry with a fresh check-in code on unique-constraint collision
+    response = None
+    for attempt in range(1, MAX_CODE_RETRIES + 1):
+        try:
+            response = supabase.table("events").insert(dict(data)).execute()
+            break
+        except Exception as exc:
+            if is_check_in_code_collision(exc) and attempt < MAX_CODE_RETRIES:
+                logger.warning(
+                    "Check-in code collision on attempt %d/%d, regenerating code",
+                    attempt, MAX_CODE_RETRIES,
+                )
+                assign_event_check_in_secrets(data)
+            else:
+                raise
 
-    if not response.data:
+    if not response or not response.data:
         raise HTTPException(status_code=400, detail="Event creation failed")
 
     event = response.data[0]
