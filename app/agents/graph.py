@@ -32,6 +32,8 @@ def main_agent_node(state: AgentState) -> AgentState:
     return res
 
 
+# @cpt-comp:cpt-eventbackend-component-tool-caller:p1
+# @cpt-adr:cpt-eventbackend-adr-caller-identity-blocking:p1
 def tools_node(state: AgentState) -> AgentState:
     """Execute deterministic backend tools per specification."""
     tool_name = state.get("tool_name")

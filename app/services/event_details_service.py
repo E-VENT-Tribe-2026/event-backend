@@ -28,6 +28,9 @@ class EventDetailsInputError(Exception):
         self.field = field
 
 
+# @cpt-comp:cpt-eventbackend-component-get-event-details-tool:p1
+# @cpt-flow:cpt-eventbackend-seq-get-event-details:p1
+# @cpt-flow:cpt-eventbackend-principle-fail-closed-visibility:p1
 def get_event_details(payload: Any, user_id: Optional[str]) -> dict:
     request_id = str(uuid.uuid4())
     if not isinstance(user_id, str) or not user_id.strip():

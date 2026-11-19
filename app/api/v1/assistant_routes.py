@@ -29,6 +29,7 @@ def _signed_in_user_id(user: Any) -> str:
     return user_id
 
 
+# @cpt-flow:cpt-eventbackend-constraint-authenticated-user-context:p1
 @router.post("/chat", response_model=AssistantChatResponse, response_model_exclude_none=True)
 def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
     return generate_reply(body.messages, getattr(user, "id", None), body.draft, user=user)
@@ -44,16 +45,19 @@ def assistant_conversation(user=Depends(get_current_user)):
     return start_conversation(_signed_in_user_id(user))
 
 
+# @cpt-flow:cpt-eventbackend-adr-caller-identity-blocking:p1
 @router.post("/tools/search-events", response_model=SearchEventsResponse)
 def search_events_tool(body: Any = Body(...), user=Depends(get_current_user)):
     return search_events(body, getattr(user, "id", None))
 
 
+# @cpt-flow:cpt-eventbackend-component-get-event-details-tool:p1
 @router.post("/tools/event-details", response_model=EventDetailsResponse)
 def event_details_tool(body: Any = Body(...), user=Depends(get_current_user)):
     return get_event_details(body, getattr(user, "id", None))
 
 
+# @cpt-flow:cpt-eventbackend-component-draft-new-event-tool:p1
 @router.post("/tools/draft-event", response_model=DraftNewEventResponse)
 def draft_event_tool(body: Any = Body(...), user=Depends(require_regular_user)):
     return draft_new_event(body, getattr(user, "id", None))

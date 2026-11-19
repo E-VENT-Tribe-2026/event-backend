@@ -103,6 +103,8 @@ def extract_minimal_user(user: Any = None, user_id: Optional[str] = None) -> Opt
     return minimal or None
 
 
+# @cpt-flow:cpt-eventbackend-constraint-no-agent-db-access:p1
+# @cpt-flow:cpt-eventbackend-constraint-authenticated-user-context:p1
 def run_agent_workflow(
     messages: list[Any],
     user_id: Optional[str] = None,
@@ -144,6 +146,7 @@ def _issue_messages(issues: Any) -> list[str]:
     return messages
 
 
+# @cpt-comp:cpt-eventbackend-component-response-collector:p1
 def generate_reply(
     messages: list[AssistantMessage],
     user_id: Optional[str] = None,

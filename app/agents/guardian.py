@@ -36,6 +36,7 @@ SENSITIVE_OUTPUT_PATTERNS = [
 ]
 
 
+# @cpt-comp:cpt-eventbackend-component-guardian-agent:p1
 class GuardianAgent:
     """Boundary firewall providing input validation and output sanitization."""
 

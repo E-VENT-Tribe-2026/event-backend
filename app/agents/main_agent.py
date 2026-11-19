@@ -26,6 +26,8 @@ MAIN_AGENT_PROMPT = (
 )
 
 
+# @cpt-comp:cpt-eventbackend-component-intent-identifier:p1
+# @cpt-comp:cpt-eventbackend-component-response-collector:p1
 class MainAgent:
     @classmethod
     def _get_system_prompt(cls, state: AgentState) -> str:

@@ -17,6 +17,9 @@ _ALLOWED_FIELDS = {
 }
 
 
+# @cpt-comp:cpt-eventbackend-component-draft-new-event-tool:p1
+# @cpt-flow:cpt-eventbackend-constraint-draft-preview-only:p1
+# @cpt-flow:cpt-eventbackend-seq-draft-and-publish:p1
 def draft_new_event(payload: Any, user_id: Optional[str] = None) -> dict:
     """
     Validate structured event draft input and return a normalized preview.

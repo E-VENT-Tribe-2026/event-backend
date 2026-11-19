@@ -34,6 +34,9 @@ class SearchInputError(Exception):
         self.field = field
 
 
+# @cpt-comp:cpt-eventbackend-component-search-events-tool:p1
+# @cpt-flow:cpt-eventbackend-seq-search-events:p1
+# @cpt-adr:cpt-eventbackend-adr-caller-identity-blocking:p1
 def search_events(payload: Any, viewer_id: Optional[str] = None) -> dict:
     """Search active events. With a viewer_id, events organized by users the viewer blocked or
     who blocked the viewer are left out (unless the viewer participates in them)."""
