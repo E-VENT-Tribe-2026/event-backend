@@ -4,6 +4,8 @@ from app.db.supabase_client import supabase
 from gotrue.errors import AuthApiError
 from app.utils.embedding_helper import generate_embedding
 from app.core.config import settings
+from app.core.jwt_middleware import verify_jwt, InvalidTokenError, JWKSUnavailableError
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -354,33 +356,43 @@ def verify_reset_token(token_hash: str):
 def reset_password(access_token: str, new_password: str):
     """
     Step 2: Validate token + update password.
-    The access_token is a JWT returned by verify_reset_token.
-    We decode it to extract the user ID, then update via admin.
+    The access_token is the JWT returned by verify_reset_token. It is verified
+    (signature, expiry, audience, issuer) before the user ID is taken from its
+    `sub` claim. No current password is required because this is the emailed
+    recovery flow.
     """
-    import json
-    import base64
     from supabase import create_client
 
     try:
-        # Decode JWT payload (middle segment) to get user ID
-        # JWT format: header.payload.signature
-        parts = access_token.split(".")
-        if len(parts) != 3:
+        try:
+            payload = asyncio.run(verify_jwt(access_token))
+        except InvalidTokenError as e:
+            logger.warning("reset_password rejected token: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid access token format."
+                detail="Invalid or expired reset token."
+            ) from e
+        except JWKSUnavailableError as e:
+            logger.error("reset_password JWKS unavailable: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not verify the reset link right now. Please try again."
+            ) from e
+        except Exception as e:
+            # Fail closed on anything unexpected from verification; never log the token.
+            logger.error(
+                "reset_password verification failed (%s): %s", type(e).__name__, e
             )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not verify the reset link right now. Please try again."
+            ) from e
 
-        # Add padding if needed and decode
-        payload = parts[1]
-        payload += "=" * (4 - len(payload) % 4)
-        decoded = json.loads(base64.urlsafe_b64decode(payload))
-
-        user_id = decoded.get("sub")
-        if not user_id:
+        user_id = payload.get("sub") if isinstance(payload, dict) else None
+        if not isinstance(user_id, str) or not user_id.strip():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid access token: no user ID found."
+                detail="Invalid or expired reset token."
             )
 
         # Create a fresh admin client to ensure we have service role privileges
