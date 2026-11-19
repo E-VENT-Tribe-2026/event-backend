@@ -69,39 +69,75 @@ def _is_administrator(user_id: str) -> bool | None:
 
 
 def _insert_warning(user_id: str, admin_id: str, reason: str,
-                    about_type: str | None, about_id: str | None, now: str) -> dict:
-    created = supabase.table("warnings").insert({
+                    about_type: str | None, about_id: str | None, now: str,
+                    removal_key: str | None = None) -> dict:
+    row = {
         "user_id": user_id,
         "admin_id": admin_id,
         "reason": reason,
         "about_type": about_type,
         "about_id": about_id,
         "created_at": now,
-    }).execute()
+    }
+    # Only a content removal sends the key; manual warnings never touch the column.
+    if removal_key is not None:
+        row["removal_key"] = removal_key
+    created = supabase.table("warnings").insert(row).execute()
     return created.data[0]
+
+
+def _find_removal_warning(user_id: str, removal_key: str) -> dict | None:
+    res = (
+        supabase.table("warnings").select("*")
+        .eq("user_id", user_id).eq("removal_key", removal_key)
+        .limit(1).execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    """True for a Postgres unique violation (SQLSTATE 23505): structured code first, then the text."""
+    if getattr(exc, "code", None) == "23505":
+        return True
+    candidates = [getattr(exc, "details", None), getattr(exc, "message", None), *getattr(exc, "args", ())]
+    for item in candidates:
+        if isinstance(item, dict) and str(item.get("code")) == "23505":
+            return True
+    text = str(exc)
+    return "23505" in text or "duplicate key" in text
 
 
 def give_removal_warning(user_id: str, admin_id: str, reason: str,
                          about_type: str, about_id: str) -> dict | None:
-    """The warning that comes with removing a user's event or message (#236).
+    """The warning that comes with removing a user's event or message (#236, #255).
 
     Stored like any warning (counts, history, dialog to acknowledge) but it sends no
     notification of its own and writes no audit entry: the removal sends the one
     "Your content was removed" notification and writes the one audit entry.
     Returns None, and gives no warning, when the owner is now an administrator.
     A failure raises, so the caller can undo the removal.
+
+    The warning is marked with removal_key ('event:<id>' / 'chat_message:<id>'). A retry
+    after a lost response reuses only this removal's own warning (same user and key), in
+    whatever state it is now (a withdrawn one stays withdrawn). Manual warnings and
+    warnings of earlier removals without a key are never reused.
     """
     if _is_administrator(user_id):
         return None
-    # A retry after a lost response must not warn twice for the same removal.
-    existing = (
-        supabase.table("warnings").select("*")
-        .eq("user_id", user_id).eq("about_type", about_type).eq("about_id", about_id)
-        .limit(1).execute()
-    )
-    if existing.data:
-        return existing.data[0]
-    return _insert_warning(user_id, admin_id, reason, about_type, about_id, _now())
+    key = f"{about_type}:{about_id}"
+    existing = _find_removal_warning(user_id, key)
+    if existing:
+        return existing
+    try:
+        return _insert_warning(user_id, admin_id, reason, about_type, about_id, _now(),
+                               removal_key=key)
+    except Exception as exc:
+        # A concurrent request stored the same removal's warning first (unique violation).
+        if _is_unique_violation(exc):
+            existing = _find_removal_warning(user_id, key)
+            if existing:
+                return existing
+        raise
 
 
 def give_warning(user_id: str, admin_id: str, reason: str,
