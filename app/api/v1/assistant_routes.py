@@ -1,12 +1,18 @@
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.core.dependencies import get_current_user, require_regular_user
-from app.schemas.assistant_schema import AssistantChatRequest, AssistantChatResponse
+from app.schemas.assistant_schema import (
+    AssistantChatRequest,
+    AssistantChatResponse,
+    AssistantConversationResponse,
+    AssistantHistoryResponse,
+)
 from app.schemas.event_details_schema import EventDetailsResponse
 from app.schemas.event_draft_schema import DraftNewEventResponse
 from app.schemas.event_search_schema import SearchEventsResponse
+from app.services.assistant_conversation_service import list_history, start_conversation
 from app.services.assistant_service import generate_reply
 from app.services.event_details_service import get_event_details
 from app.services.event_draft_service import draft_new_event
@@ -16,9 +22,26 @@ from app.services.event_search_service import search_events
 router = APIRouter()
 
 
+def _signed_in_user_id(user: Any) -> str:
+    user_id = str(getattr(user, "id", "") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user_id
+
+
 @router.post("/chat", response_model=AssistantChatResponse, response_model_exclude_none=True)
 def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
     return generate_reply(body.messages, getattr(user, "id", None), body.draft, user=user)
+
+
+@router.get("/messages", response_model=AssistantHistoryResponse)
+def assistant_messages(user=Depends(get_current_user)):
+    return list_history(_signed_in_user_id(user))
+
+
+@router.post("/conversations", response_model=AssistantConversationResponse)
+def assistant_conversation(user=Depends(get_current_user)):
+    return start_conversation(_signed_in_user_id(user))
 
 
 @router.post("/tools/search-events", response_model=SearchEventsResponse)
