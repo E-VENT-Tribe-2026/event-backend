@@ -15,8 +15,9 @@ AUDIT_PAGE_MAX = 100
 
 
 def record_audit(action: str, admin_id: str, entity_type: str, entity_id: str,
-                 description: str, details: dict | None = None) -> None:
-    """Write one audit entry. A failure is logged, never raised: the action itself already happened."""
+                 description: str, details: dict | None = None) -> bool:
+    """Write one audit entry. A failure is logged, never raised (the action itself already happened);
+    it returns False, so a caller that must not lose the entry can tell."""
     entry = {
         "type": action,
         "description": description,
@@ -30,6 +31,8 @@ def record_audit(action: str, admin_id: str, entity_type: str, entity_id: str,
         supabase.table("logs").insert(entry).execute()
     except Exception as e:
         logger.error(f"Could not write audit log entry {action} for {entity_type} {entity_id}: {e}")
+        return False
+    return True
 
 
 def _people(ids) -> dict:

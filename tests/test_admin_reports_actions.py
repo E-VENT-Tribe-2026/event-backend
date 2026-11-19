@@ -194,6 +194,23 @@ def _report_logs(db) -> list:
     return [l for l in db.tables["logs"] if l.get("entity_type") == "report"]
 
 
+def _complete_removal(db, kind, by=ADM2):
+    """Mark the event / message of TOM as removed the way a finished removal leaves it (#256): the removal
+    mark, TOM's keyed warning, his content_removed notification and the audit entry."""
+    if kind == "event":
+        _event_row(db).update(removed_at="2026-10-20T00:00:00+00:00", removed_by=by)
+        about_type, about_id, audit_type, audit_entity = "event", EV1, "event_removed", "event"
+    else:
+        _chat_row(db).update(removed_at="2026-10-20T00:00:00+00:00", removed_by=by)
+        about_type, about_id, audit_type, audit_entity = "chat_message", str(MSG), "message_removed", "chat_message"
+    warning = db.add("warnings", {"user_id": TOM, "admin_id": by, "reason": "removed", "about_type": about_type,
+                                  "about_id": about_id, "removal_key": f"{about_type}:{about_id}"})
+    db.add("notifications", {"user_id": TOM, "event_id": EV1, "type": "content_removed", "message": "removed",
+                             "is_read": False, "warning_id": warning["id"]})
+    db.add("logs", {"type": audit_type, "created_by_id": by, "entity_type": audit_entity,
+                    "entity_id": about_id, "description": "removed", "values": []})
+
+
 def _snapshot(db) -> dict:
     return copy.deepcopy(db.tables)
 
@@ -548,7 +565,7 @@ def test_remove_content_on_a_user_report_from_a_profile_is_400_no_content_to_rem
 
 def test_remove_content_on_an_already_removed_event_is_409_already_removed(db):
     _seed(db, "event")
-    _event_row(db).update(removed_at="2026-10-20T00:00:00+00:00", removed_by=ADM2)
+    _complete_removal(db, "event")
     before = _snapshot(db)
     res = _act(action="remove_content", reason=None)
     assert res.status_code == 409, res.text
@@ -560,7 +577,7 @@ def test_remove_content_on_an_already_removed_event_is_409_already_removed(db):
 
 def test_remove_content_on_an_already_removed_message_is_409_already_removed(db):
     _seed(db, "message")
-    _chat_row(db).update(removed_at="2026-10-20T00:00:00+00:00", removed_by=ADM2)
+    _complete_removal(db, "message")
     before = _snapshot(db)
     res = _act(action="remove_content", reason=None)
     assert res.status_code == 409, res.text
