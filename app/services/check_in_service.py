@@ -19,12 +19,34 @@ CHECK_IN_WINDOW_AFTER = timedelta(hours=12)
 WRONG_CODE_DETAIL = "Too many incorrect check-in codes. Please wait a moment and try again."
 
 
+MAX_CODE_RETRIES = 5
+
+
+def generate_check_in_code() -> str:
+    """Return a random six-digit check-in code as a zero-padded string."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
 def assign_event_check_in_secrets(data: dict) -> dict:
     """Give a new event its six-digit code. The QR code encodes that same code."""
-    code = f"{secrets.randbelow(1_000_000):06d}"
+    code = generate_check_in_code()
     data["check_in_code"] = code
     data["check_in_qr_content"] = code
     return data
+
+
+def is_check_in_code_collision(exc: Exception) -> bool:
+    """Check whether a database exception is a unique-constraint violation on check_in_code."""
+    parts = [str(exc), str(getattr(exc, "code", "") or ""), str(getattr(exc, "message", "") or "")]
+    for attr in ("details", "hint", "diag"):
+        parts.append(str(getattr(exc, attr, "") or ""))
+    if getattr(exc, "args", None):
+        parts.append(str(exc.args))
+    blob = " ".join(parts).lower()
+    return "events_check_in_code_uniq" in blob or (
+        ("23505" in blob or "unique" in blob or "duplicate" in blob)
+        and "check_in_code" in blob
+    )
 
 
 def _parse_start(value) -> datetime | None:

@@ -215,6 +215,107 @@ class TestCreateEvent:
         assert payload["banner_url"] == banner
         assert "banner" not in payload
 
+    @patch("app.services.event_service.post_system_notification")
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    @patch("app.services.check_in_service.secrets.randbelow")
+    def test_create_event_retries_on_check_in_code_collision(
+        self, mock_randbelow, mock_sb, mock_embed, mock_notify, mock_post_sys
+    ):
+        """Ticket #266: When check_in_code collides with events_check_in_code_uniq,
+
+        backend generates another code and retries safely.
+        """
+        # Step 1: Mock secrets.randbelow to return colliding code 482913 first, then 765432
+        mock_randbelow.side_effect = [482913, 765432]
+
+        event_row = {
+            "id": "e-new-1",
+            "title": "Summer Gala",
+            "status": "active",
+            "check_in_code": "765432",
+            "check_in_qr_content": "765432",
+        }
+
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.insert.return_value = chain
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.is_.return_value = chain
+
+        # Attempt 1 raises unique constraint violation for events_check_in_code_uniq.
+        # Attempt 2 succeeds with the regenerated code.
+        # Third call is event_participants insert.
+        chain.execute.side_effect = [
+            Exception('duplicate key value violates unique constraint "events_check_in_code_uniq"'),
+            MagicMock(data=[event_row]),
+            MagicMock(data=[{"user_id": "u1", "event_id": "e-new-1"}]),
+        ]
+
+        from app.services.event_service import create_event
+        # Step 2: Submit valid event creation request
+        result = create_event("u1", {"title": "Summer Gala", "category": "party"})
+
+        # Step 3: Verify the outcome
+        assert result["id"] == "e-new-1"
+        assert result["title"] == "Summer Gala"
+
+        # Check insert calls: first with colliding code 482913, then with new code 765432
+        insert_calls = chain.insert.call_args_list
+        assert len(insert_calls) >= 2
+        first_payload = insert_calls[0][0][0]
+        second_payload = insert_calls[1][0][0]
+
+        assert first_payload["check_in_code"] == "482913"
+        assert first_payload["check_in_qr_content"] == "482913"
+        assert second_payload["check_in_code"] == "765432"
+        assert second_payload["check_in_qr_content"] == "765432"
+
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    @patch("app.services.check_in_service.secrets.randbelow", return_value=482913)
+    def test_create_event_re_raises_when_all_retries_fail(
+        self, mock_randbelow, mock_sb, mock_embed, mock_notify
+    ):
+        from app.services.check_in_service import MAX_CODE_RETRIES
+
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.insert.return_value = chain
+        chain.execute.side_effect = Exception(
+            'duplicate key value violates unique constraint "events_check_in_code_uniq"'
+        )
+
+        from app.services.event_service import create_event
+        with pytest.raises(Exception) as exc:
+            create_event("u1", {"title": "Always Colliding"})
+
+        assert "events_check_in_code_uniq" in str(exc.value)
+        # Verify it tried MAX_CODE_RETRIES times
+        assert chain.execute.call_count == MAX_CODE_RETRIES
+
+    @patch("app.services.event_service.create_notification")
+    @patch("app.services.event_service.generate_embedding", return_value=None)
+    @patch("app.services.event_service.supabase")
+    def test_create_event_does_not_retry_non_code_errors(
+        self, mock_sb, mock_embed, mock_notify
+    ):
+        chain = MagicMock()
+        mock_sb.table.return_value = chain
+        chain.insert.return_value = chain
+        chain.execute.side_effect = Exception("Database connection failed")
+
+        from app.services.event_service import create_event
+        with pytest.raises(Exception) as exc:
+            create_event("u1", {"title": "Error Event"})
+
+        assert "Database connection failed" in str(exc.value)
+        assert chain.execute.call_count == 1
+
+
 
 # ──────────────────────────────────────────────
 # update_event
