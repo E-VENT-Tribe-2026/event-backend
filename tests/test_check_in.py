@@ -74,6 +74,19 @@ class TestGetCheckInCode:
             assert exc.status_code == 403
             assert "organizer" in exc.detail.lower()
 
+    @patch("app.services.check_in_service.supabase")
+    def test_removed_event_is_refused(self, mock_sb):
+        mock_sb.table.return_value = _chain([_event(removed_at="2026-11-20T00:00:00+00:00")])
+        try:
+            get_event_check_in_code(EVENT_ID, ORG)
+            assert False
+        except HTTPException as exc:
+            assert exc.status_code == 410
+            assert exc.detail == {
+                "code": "event_removed",
+                "message": "This event was removed by an administrator.",
+            }
+
 
 class TestCheckIn:
     def _setup(self, mock_sb, event=None, participants=None, existing=None, inserted=None):
@@ -128,6 +141,29 @@ class TestCheckIn:
         except HTTPException as exc:
             assert exc.status_code == 403
             assert "participants" in exc.detail.lower()
+
+    @patch("app.services.check_in_service.supabase")
+    def test_removed_event_is_refused(self, mock_sb):
+        self._setup(mock_sb, event=_event(removed_at="2026-11-20T00:00:00+00:00"))
+        try:
+            check_in(EVENT_ID, PART, code=CODE)
+            assert False
+        except HTTPException as exc:
+            assert exc.status_code == 410
+            assert exc.detail == {
+                "code": "event_removed",
+                "message": "This event was removed by an administrator.",
+            }
+
+    @patch("app.services.check_in_service.supabase")
+    def test_cancelled_event_is_refused(self, mock_sb):
+        self._setup(mock_sb, event=_event(status="cancelled"))
+        try:
+            check_in(EVENT_ID, PART, code=CODE)
+            assert False
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "cancelled" in exc.detail.lower()
 
     @patch("app.services.check_in_service.supabase")
     def test_wrong_code_is_refused(self, mock_sb):
@@ -224,6 +260,23 @@ class TestListCheckIns:
             assert False
         except HTTPException as exc:
             assert exc.status_code == 403
+
+    @patch("app.services.check_in_service.supabase")
+    def test_removed_event_is_refused(self, mock_sb):
+        tables = {
+            "events": _chain([_event(removed_at="2026-11-20T00:00:00+00:00")]),
+            "event_participants": _chain([{"user_id": PART}]),
+        }
+        mock_sb.table.side_effect = lambda name: tables[name]
+        try:
+            list_event_check_ins(EVENT_ID, PART)
+            assert False
+        except HTTPException as exc:
+            assert exc.status_code == 410
+            assert exc.detail == {
+                "code": "event_removed",
+                "message": "This event was removed by an administrator.",
+            }
 
 
 class TestCheckInRoutes:
