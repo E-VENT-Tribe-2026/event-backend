@@ -32,6 +32,7 @@ SERVICE_MODULES = [
     "removed_content", "event_service", "chat_service", "admin_service", "saved_event_service",
     "participant_service", "event_search_service", "event_details_service", "recommendation_service",
     "profile_service", "invitation_service", "report_service", "admin_report_history_service",
+    "check_in_service",
 ]
 
 client = TestClient(app)
@@ -474,6 +475,18 @@ class TestUsersNoLongerSeeRemovedEvents:
         assert client.post(f"/api/participants/{EVENT}/join", headers=HEADERS).status_code == 410
         current["id"] = ORG
         assert client.patch(f"/api/events/{EVENT}/cancel", headers=HEADERS).status_code == 410
+
+    def test_check_in_on_removed_event_is_refused(self, db):
+        remove_event()
+        current["id"] = P1
+        r = client.post(
+            f"/api/events/{EVENT}/check-in",
+            json={"code": "123456"},
+            headers=HEADERS,
+        )
+        assert r.status_code == 410
+        assert code(r) == "event_removed"
+        assert len(db.tables.get("event_check_ins", [])) == 0
 
     # Invitations to a removed event are covered in test_content_removal_review_fixes.py.
 
