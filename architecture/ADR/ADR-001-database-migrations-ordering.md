@@ -75,4 +75,4 @@ Verified by:
 
 - **Issue**: [#181](https://github.com/E-VENT-Tribe-2026/event-backend/issues/181)
 - **Guidelines**: [MIGRATION_GUIDELINES.md](../../../supabase/MIGRATION_GUIDELINES.md)
-- **Task Plan**: [.agents/tasks/plan.md](../../../.agents/tasks/plan.md)
+- **Task Plan**: Issue #181 Execution Plan

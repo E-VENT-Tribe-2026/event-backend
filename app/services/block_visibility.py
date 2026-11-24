@@ -144,6 +144,7 @@ def filter_hidden_events(events, viewer_id: str | None):
     ]
 
 
+# @cpt-adr:cpt-eventbackend-adr-caller-identity-blocking:p1
 def is_event_hidden(event: dict, viewer_id: str | None) -> bool:
     """True when a single event row must be treated as not found for the viewer."""
     return bool(event) and bool(viewer_id) and not filter_hidden_events([event], viewer_id)
