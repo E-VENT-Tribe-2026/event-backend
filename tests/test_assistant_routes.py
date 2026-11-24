@@ -117,6 +117,24 @@ def test_assistant_chat_requires_authentication():
         app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u1")
 
 
+def test_assistant_chat_refuses_administrator_accounts(stored_turns):
+    with patch("app.core.dependencies.supabase") as supabase, patch(
+        "app.services.assistant_service.run_agent_workflow"
+    ) as run:
+        supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = (
+            SimpleNamespace(data={"role": "administrator"})
+        )
+        response = client.post(
+            "/api/assistant/chat",
+            json={"messages": [{"role": "user", "content": "Hello"}]},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 403
+    run.assert_not_called()
+    stored_turns.assert_not_called()
+
+
 def test_assistant_chat_uses_server_prompt_and_does_not_enable_tools():
     with patch("app.services.assistant_service.settings.GEMINI_API_KEY", "test-key"), patch(
         "app.services.assistant_service.OpenAI"
