@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from app.core.dependencies import get_current_user, require_regular_user
+from app.core.dependencies import require_regular_user
 from app.schemas.assistant_schema import (
     AssistantChatRequest,
     AssistantChatResponse,
@@ -31,29 +31,29 @@ def _signed_in_user_id(user: Any) -> str:
 
 # @cpt-flow:cpt-eventbackend-constraint-authenticated-user-context:p1
 @router.post("/chat", response_model=AssistantChatResponse, response_model_exclude_none=True)
-def chat(body: AssistantChatRequest, user=Depends(get_current_user)):
+def chat(body: AssistantChatRequest, user=Depends(require_regular_user)):
     return generate_reply(body.messages, getattr(user, "id", None), body.draft, user=user)
 
 
 @router.get("/messages", response_model=AssistantHistoryResponse)
-def assistant_messages(user=Depends(get_current_user)):
+def assistant_messages(user=Depends(require_regular_user)):
     return list_history(_signed_in_user_id(user))
 
 
 @router.post("/conversations", response_model=AssistantConversationResponse)
-def assistant_conversation(user=Depends(get_current_user)):
+def assistant_conversation(user=Depends(require_regular_user)):
     return start_conversation(_signed_in_user_id(user))
 
 
 # @cpt-flow:cpt-eventbackend-adr-caller-identity-blocking:p1
 @router.post("/tools/search-events", response_model=SearchEventsResponse)
-def search_events_tool(body: Any = Body(...), user=Depends(get_current_user)):
+def search_events_tool(body: Any = Body(...), user=Depends(require_regular_user)):
     return search_events(body, getattr(user, "id", None))
 
 
 # @cpt-flow:cpt-eventbackend-component-get-event-details-tool:p1
 @router.post("/tools/event-details", response_model=EventDetailsResponse)
-def event_details_tool(body: Any = Body(...), user=Depends(get_current_user)):
+def event_details_tool(body: Any = Body(...), user=Depends(require_regular_user)):
     return get_event_details(body, getattr(user, "id", None))
 
 
