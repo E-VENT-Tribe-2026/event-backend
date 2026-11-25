@@ -240,7 +240,16 @@ def mfa_verify(
 @router.post("/choose-username")
 def choose_username_endpoint(data: ChooseUsernameRequest, user=Depends(get_current_user)):
     from app.services.profile_service import choose_username
-    return choose_username(user_id=user.id, username=data.username, full_name=data.full_name)
+    from app.services.registration_invite_service import (
+        mark_registration_invite_used,
+        require_invite_to_finish_signup,
+    )
+    # A first Google sign-in creates the account without the invite check, so ask for it here.
+    invite = require_invite_to_finish_signup(user, data.invite_code)
+    result = choose_username(user_id=user.id, username=data.username, full_name=data.full_name)
+    if invite:
+        mark_registration_invite_used(invite["id"], user.id)
+    return result
 
 
 @router.post("/forgot-password")

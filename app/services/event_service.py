@@ -25,12 +25,16 @@ def _email_participants(event: dict, email_type: str):
     )
     from app.core.config import settings
 
-    from app.core.config import settings
+    # send_email prefers Resend and falls back to SMTP, so either one is enough.
+    resend_configured = bool(settings.RESEND_API_KEY)
+    smtp_configured = bool(settings.SMTP_USER and settings.SMTP_PASSWORD)
+    logger.info(
+        f"_email_participants called: type={email_type}, event={event.get('id')}, "
+        f"resend_configured={resend_configured}, smtp_configured={smtp_configured}"
+    )
 
-    logger.info(f"_email_participants called: type={email_type}, event={event.get('id')}, smtp_user={settings.SMTP_USER}, smtp_configured={bool(settings.SMTP_USER and settings.SMTP_PASSWORD)}")
-
-    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        logger.warning("SMTP not configured — skipping participant emails.")
+    if not resend_configured and not smtp_configured:
+        logger.warning("No email provider configured (Resend or SMTP): skipping participant emails.")
         return
 
     event_id = event.get("id")

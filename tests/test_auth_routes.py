@@ -36,8 +36,9 @@ class TestAuthRoutes:
             invite_code="ABCD-EFGH",
         )
 
+    @patch("app.services.registration_invite_service.require_invite_to_finish_signup", return_value=None)
     @patch("app.services.profile_service.choose_username")
-    def test_auth_choose_username_route(self, mock_choose):
+    def test_auth_choose_username_route(self, mock_choose, _mock_invite):
         class MockUser:
             id = "u1"
             email = "test@test.com"

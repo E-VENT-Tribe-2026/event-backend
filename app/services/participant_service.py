@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from fastapi import HTTPException
 from app.db.supabase_client import supabase
 from app.services.notification_service import create_notification
@@ -10,6 +11,30 @@ from app.services.friendship_service import get_friend_ids
 from app.core.dependencies import require_admin
 
 logger = logging.getLogger(__name__)
+
+
+def _event_start(event: dict) -> datetime | None:
+    """The event's start as an aware datetime, or None when it is missing or unreadable."""
+    value = event.get("start_datetime")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        start = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+
+
+def _participant_count(event_id: str) -> int:
+    response = (
+        supabase.table("event_participants")
+        .select("user_id", count="exact")
+        .eq("event_id", event_id)
+        .execute()
+    )
+    if response.count is not None:
+        return response.count
+    return len(response.data or [])
 
 
 def _get_user_email(user_id: str) -> str | None:
@@ -79,6 +104,15 @@ def join_event(user_id: str, event_id: str):
     )
     if existing.data:
         raise HTTPException(status_code=400, detail="User already joined event")
+
+    # The join button hides these cases, but a direct request must be refused too.
+    start = _event_start(event)
+    if start is not None and start <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="This event has already started, so it can no longer be joined.")
+
+    capacity = event.get("max_capacity")
+    if isinstance(capacity, int) and capacity > 0 and _participant_count(event_id) >= capacity:
+        raise HTTPException(status_code=400, detail="This event has reached its maximum capacity.")
 
     response = (
         supabase.table("event_participants")

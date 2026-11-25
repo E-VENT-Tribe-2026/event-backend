@@ -150,6 +150,8 @@ class ChangePasswordRequest(BaseModel):
 class ChooseUsernameRequest(BaseModel):
     username: str
     full_name: str
+    # Required for accounts that did not register through the invite-checked form (Google).
+    invite_code: Optional[str] = None
 
     @field_validator("username", mode="before")
     @classmethod

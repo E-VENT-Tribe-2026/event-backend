@@ -32,8 +32,9 @@ class TestProfileRoutes:
         finally:
             app.dependency_overrides.pop(get_own_profile_user, None)
 
+    @patch("app.services.registration_invite_service.require_invite_to_finish_signup", return_value=None)
     @patch("app.api.v1.profile_routes.choose_username")
-    def test_post_choose_username_route(self, mock_choose):
+    def test_post_choose_username_route(self, mock_choose, _mock_invite):
         app.dependency_overrides[get_current_user] = lambda: MockUser()
         try:
             mock_choose.return_value = {

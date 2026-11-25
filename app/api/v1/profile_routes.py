@@ -44,7 +44,15 @@ def post_choose_username(
     user=Depends(require_regular_user)
 ):
     """Allow an account without a username to choose one and set a full name."""
-    return choose_username(user.id, data.username, data.full_name)
+    from app.services.registration_invite_service import (
+        mark_registration_invite_used,
+        require_invite_to_finish_signup,
+    )
+    invite = require_invite_to_finish_signup(user, data.invite_code)
+    result = choose_username(user.id, data.username, data.full_name)
+    if invite:
+        mark_registration_invite_used(invite["id"], user.id)
+    return result
 
 
 @router.post("/username")

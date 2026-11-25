@@ -15,6 +15,8 @@ INVITE_TTL = timedelta(days=7)
 INVITE_CODE_LENGTH = 8
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 INVALID_INVITE = "A valid invitation code is required to register."
+# Accounts created before invitations existed keep finishing their profile without a code.
+INVITE_REQUIRED_SINCE = datetime(2026, 10, 25, tzinfo=timezone.utc)
 
 
 def normalize_invite_email(email: str) -> str:
@@ -206,3 +208,60 @@ def send_registration_invite(admin_id: str, email: EmailStr | str) -> dict:
         "expires_at": expires_at.isoformat(),
         "message": "Invitation email sent. The invited person must enter this code to register.",
     }
+
+
+def _parse_auth_time(value) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _account_created_at(user) -> datetime | None:
+    """When the auth account was created; looked up when the token's user does not carry it."""
+    created = _parse_auth_time(getattr(user, "created_at", None))
+    if created is not None:
+        return created
+    try:
+        res = supabase.auth.admin.get_user_by_id(str(user.id))
+        return _parse_auth_time(getattr(getattr(res, "user", None), "created_at", None))
+    except Exception as e:
+        logger.warning(f"Could not read created_at for user {user.id}: {e}")
+        return None
+
+
+def _has_used_invite(user_id: str) -> bool:
+    res = (
+        supabase.table("registration_invites")
+        .select("id")
+        .eq("used_by", str(user_id))
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
+def require_invite_to_finish_signup(user, code: str | None) -> dict | None:
+    """
+    An account created outside the invite-checked registration (for example the first
+    "Continue with Google" sign-in) must give the invitation sent to its email before it
+    can choose a username. Returns the invite to mark used once the profile is saved,
+    or None when no invite is needed (older accounts, or one already redeemed).
+    """
+    created = _account_created_at(user)
+    if created is not None and created < INVITE_REQUIRED_SINCE:
+        return None
+    if _has_used_invite(user.id):
+        return None
+    if not (code or "").strip():
+        raise _invite_error(
+            "An invitation code is required to create an account. "
+            "Enter the code from the invitation sent to your email."
+        )
+    return require_registration_invite(getattr(user, "email", None) or "", code)

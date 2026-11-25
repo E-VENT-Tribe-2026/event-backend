@@ -116,6 +116,8 @@ class TestOnboardingGateRouteLevel:
 
         try:
             with patch("app.core.dependencies.supabase", incomplete_chain), \
+                 patch("app.services.registration_invite_service.require_invite_to_finish_signup",
+                       return_value=None), \
                  patch("app.api.v1.profile_routes.choose_username",
                        return_value={"id": "u1", "username": "alice42", "full_name": "Alice Smith"}), \
                  patch("app.services.profile_service.choose_username",
