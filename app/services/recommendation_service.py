@@ -11,6 +11,35 @@ from app.services.removed_content import filter_removed_events
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _parse_interests(value) -> list[str]:
+    """Normalise interests from various storage formats (list, postgres array, json string, comma-separated string)."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return []
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return [str(v).strip() for v in parsed if v is not None and str(v).strip()]
+            except (ValueError, TypeError):
+                pass
+        if value.startswith("{") and value.endswith("}"):
+            value = value[1:-1]
+        return [part.strip().strip('"\'') for part in value.split(",") if part.strip().strip('"\'')]
+    if isinstance(value, (list, tuple, set)):
+        items = []
+        for v in value:
+            if v is not None:
+                s = str(v).strip()
+                if s:
+                    items.append(s)
+        return items
+    return []
+
+
 def _parse_embedding(value) -> list[float] | None:
     """Normalise an embedding coming out of Supabase.
 
@@ -22,8 +51,20 @@ def _parse_embedding(value) -> list[float] | None:
     if value is None:
         return None
     if isinstance(value, str):
-        value = json.loads(value)
-    return [float(v) for v in value]
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(value, (list, tuple)):
+        return None
+    try:
+        parsed = [float(v) for v in value]
+        return parsed if parsed else None
+    except (ValueError, TypeError):
+        return None
 
 
 def _average_embeddings(embeddings: list[list[float]]) -> list[float] | None:
@@ -120,9 +161,11 @@ def _fetch_already_seen_ids(user_id: str) -> set[str]:
     )
     ids: set[str] = set()
     for row in (joined.data or []):
-        ids.add(row["event_id"])
+        if row.get("event_id"):
+            ids.add(row["event_id"])
     for row in (saved.data or []):
-        ids.add(row["event_id"])
+        if row.get("event_id"):
+            ids.add(row["event_id"])
     return ids
 
 
@@ -131,6 +174,7 @@ def _fetch_already_seen_ids(user_id: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 def get_recommendations(user_id: str, limit: int = 10) -> dict:
+    limit = max(1, int(limit))
     now = datetime.now(timezone.utc).isoformat()
 
     # 1. Gather all signal embeddings
@@ -139,10 +183,14 @@ def get_recommendations(user_id: str, limit: int = 10) -> dict:
     # Parse stored interest embedding (may be a string from Supabase)
     interest_embedding = _parse_embedding(profile.get("interest_embedding"))
 
-    # If no pre-computed interest embedding, generate one on the fly
+    # If no pre-computed interest embedding, generate one on the fly from normalised interests and bio
     if not interest_embedding:
-        interests = profile.get("interests") or []
+        interests = _parse_interests(profile.get("interests"))
         bio = profile.get("bio") or ""
+        if isinstance(bio, str):
+            bio = bio.strip()
+        else:
+            bio = str(bio).strip() if bio else ""
         text = (" ".join(interests) + " " + bio).strip()
         interest_embedding = generate_embedding(text) if text else None
 
@@ -169,10 +217,14 @@ def get_recommendations(user_id: str, limit: int = 10) -> dict:
         )
 
     # 3. Semantic search against events
+    # Over-fetch candidate events (e.g. max(100, limit * 10)) so past, inactive,
+    # already-joined, already-saved, or hidden events do not starve the results
+    # of active upcoming recommendations.
+    candidate_count = max(limit * 10, 100)
     response = supabase.rpc("search_events", {
         "query_embedding": query_embedding,
         "query_text": "",           # pure vector search, no keyword boost
-        "match_count": limit + 20,  # fetch extra to allow filtering below
+        "match_count": candidate_count,  # fetch extra to allow filtering below
     }).execute()
 
     already_seen = _fetch_already_seen_ids(user_id)
