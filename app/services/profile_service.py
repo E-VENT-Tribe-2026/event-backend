@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from app.db.supabase_client import supabase
-from app.utils.embedding_helper import generate_embedding
+from app.utils.embedding_helper import generate_embedding, parse_interests
 from app.utils.validators import validate_username, validate_full_name
 from app.utils.query_safety import escape_like
 from app.services.block_visibility import get_blocked_by_ids
@@ -134,9 +134,13 @@ def get_username(user_id: str) -> str:
 
 
 def _compute_interest_embedding(interests: list[str] | None, bio: str | None) -> list[float] | None:
-    interests = interests or []
+    interests_list = parse_interests(interests)
     bio = bio or ""
-    text = (" ".join(interests) + " " + bio).strip()
+    if isinstance(bio, str):
+        bio = bio.strip()
+    else:
+        bio = str(bio).strip() if bio else ""
+    text = (" ".join(interests_list) + " " + bio).strip()
     return generate_embedding(text) if text else None
 
 

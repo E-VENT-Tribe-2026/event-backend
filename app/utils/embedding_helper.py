@@ -6,6 +6,35 @@ from mixedbread import Mixedbread
 logger = logging.getLogger(__name__)
 
 
+def parse_interests(value) -> list[str]:
+    """Normalise interests from various storage formats (list, postgres array, json string, comma-separated string)."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return []
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return [str(v).strip() for v in parsed if v is not None and str(v).strip()]
+            except (ValueError, TypeError):
+                pass
+        if value.startswith("{") and value.endswith("}"):
+            value = value[1:-1]
+        return [part.strip().strip('"\'') for part in value.split(",") if part.strip().strip('"\'')]
+    if isinstance(value, (list, tuple, set)):
+        items = []
+        for v in value:
+            if v is not None:
+                s = str(v).strip()
+                if s:
+                    items.append(s)
+        return items
+    return []
+
+
 def parse_embedding(value) -> list[float] | None:
     """Normalise a vector/jsonb embedding from Supabase to a list of floats."""
     if value is None:
