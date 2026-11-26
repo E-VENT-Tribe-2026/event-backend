@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from app.utils.embedding_helper import cosine_similarity, generate_embedding, parse_embedding
+from app.utils.embedding_helper import cosine_similarity, generate_embedding, parse_embedding, parse_interests
 
 class TestEmbeddingHelper:
     @patch("app.utils.embedding_helper.os.environ.get", return_value="fake_key")
@@ -47,6 +47,19 @@ class TestParseEmbedding:
     def test_list_and_json_string(self):
         assert parse_embedding([1, 2.5]) == [1.0, 2.5]
         assert parse_embedding("[0.1, 0.2]") == [0.1, 0.2]
+
+
+class TestParseInterests:
+    def test_various_formats(self):
+        assert parse_interests(["music", "sports"]) == ["music", "sports"]
+        assert parse_interests("{music,sports}") == ["music", "sports"]
+        assert parse_interests('{"music", "sports"}') == ["music", "sports"]
+        assert parse_interests('["music", "sports"]') == ["music", "sports"]
+        assert parse_interests("music, sports") == ["music", "sports"]
+        assert parse_interests("music") == ["music"]
+        assert parse_interests(None) == []
+        assert parse_interests("") == []
+        assert parse_interests([]) == []
 
     def test_invalid(self):
         assert parse_embedding("not-json") is None

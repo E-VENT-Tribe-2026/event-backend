@@ -79,7 +79,83 @@ class TestUpdateProfile:
         payload = update_chain.update.call_args[0][0]
         assert payload["interests"] == ["sports", "photography"]
         assert payload["interest_embedding"] == [0.1, 0.2, 0.3]
-        mock_generate.assert_called_once()
+        mock_generate.assert_called_once_with("sports photography Old bio")
+
+    @patch("app.services.profile_service.generate_embedding")
+    @patch("app.services.profile_service.supabase")
+    def test_update_interests_with_postgres_array_string_regenerates_embedding(self, mock_sb, mock_generate):
+        mock_generate.return_value = [0.4, 0.5]
+
+        select_chain = MagicMock()
+        update_chain = MagicMock()
+        mock_sb.table.side_effect = [select_chain, update_chain]
+        select_chain.select.return_value = select_chain
+        select_chain.eq.return_value = select_chain
+        select_chain.single.return_value = select_chain
+        select_chain.execute.return_value = MagicMock(data={"interests": "{gaming}", "bio": ""})
+
+        update_chain.update.return_value = update_chain
+        update_chain.eq.return_value = update_chain
+        update_chain.execute.return_value = MagicMock(data=[{"id": "u1"}])
+
+        from app.services.profile_service import update_profile
+        update_profile("u1", {"interests": ["fitness", "coffee", "sports"]})
+
+        payload = update_chain.update.call_args[0][0]
+        assert payload["interests"] == ["fitness", "coffee", "sports"]
+        assert payload["interest_embedding"] == [0.4, 0.5]
+        mock_generate.assert_called_once_with("fitness coffee sports")
+
+    @patch("app.services.profile_service.generate_embedding")
+    @patch("app.services.profile_service.supabase")
+    def test_update_bio_only_regenerates_embedding_using_existing_interests(self, mock_sb, mock_generate):
+        mock_generate.return_value = [0.8, 0.9]
+
+        select_chain = MagicMock()
+        update_chain = MagicMock()
+        mock_sb.table.side_effect = [select_chain, update_chain]
+        select_chain.select.return_value = select_chain
+        select_chain.eq.return_value = select_chain
+        select_chain.single.return_value = select_chain
+        # Existing interests formatted as postgres array string
+        select_chain.execute.return_value = MagicMock(data={"interests": "{sports,music}", "bio": "Old bio"})
+
+        update_chain.update.return_value = update_chain
+        update_chain.eq.return_value = update_chain
+        update_chain.execute.return_value = MagicMock(data=[{"id": "u1"}])
+
+        from app.services.profile_service import update_profile
+        update_profile("u1", {"bio": "New bio"})
+
+        payload = update_chain.update.call_args[0][0]
+        assert payload["bio"] == "New bio"
+        assert payload["interest_embedding"] == [0.8, 0.9]
+        # Should parse existing postgres array interests and combine with new bio
+        mock_generate.assert_called_once_with("sports music New bio")
+
+    @patch("app.services.profile_service.generate_embedding")
+    @patch("app.services.profile_service.supabase")
+    def test_update_clearing_interests_and_bio_clears_embedding(self, mock_sb, mock_generate):
+        mock_generate.return_value = None
+
+        select_chain = MagicMock()
+        update_chain = MagicMock()
+        mock_sb.table.side_effect = [select_chain, update_chain]
+        select_chain.select.return_value = select_chain
+        select_chain.eq.return_value = select_chain
+        select_chain.single.return_value = select_chain
+        select_chain.execute.return_value = MagicMock(data={"interests": ["sports"], "bio": ""})
+
+        update_chain.update.return_value = update_chain
+        update_chain.eq.return_value = update_chain
+        update_chain.execute.return_value = MagicMock(data=[{"id": "u1"}])
+
+        from app.services.profile_service import update_profile
+        update_profile("u1", {"interests": [], "bio": ""})
+
+        payload = update_chain.update.call_args[0][0]
+        assert payload["interests"] == []
+        assert payload["interest_embedding"] is None
 
     @patch("app.services.profile_service.supabase")
     def test_update_failure_raises_400(self, mock_sb):
