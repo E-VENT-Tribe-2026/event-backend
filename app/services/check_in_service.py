@@ -11,6 +11,7 @@ from app.core.user_rate_limit import (
 )
 from app.db.supabase_client import supabase
 from app.services.profile_service import get_user_summaries
+from app.services.removed_content import event_removed_error
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _normalize_code(*values: str | None) -> str:
 def _load_event(event_id: str) -> dict:
     res = (
         supabase.table("events")
-        .select("id, title, status, start_datetime, created_by, check_in_code, check_in_qr_content")
+        .select("id, title, status, start_datetime, created_by, check_in_code, check_in_qr_content, removed_at")
         .eq("id", event_id)
         .limit(1)
         .execute()
@@ -91,7 +92,10 @@ def _load_event(event_id: str) -> dict:
     rows = res.data or []
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
-    return rows[0]
+    row = rows[0]
+    if row.get("removed_at"):
+        raise event_removed_error()
+    return row
 
 
 def _participant_ids(event_id: str) -> list[str]:
@@ -138,6 +142,9 @@ def get_event_check_in_code(event_id: str, user_id: str) -> dict:
 
 def check_in(event_id: str, user_id: str, code: str | None = None, qr_content: str | None = None) -> dict:
     event = _load_event(event_id)
+
+    if event.get("removed_at"):
+        raise event_removed_error()
 
     if str(event.get("status") or "").lower() == "cancelled":
         raise HTTPException(
